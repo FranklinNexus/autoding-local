@@ -41,6 +41,10 @@ $result = Read-Fixture -Morning @('上班09:00', '未打卡') -Date @('上班打
 Assert-Condition ($result.accepted -and $result.pageStatus -ceq 'no-records' -and $null -eq $result.checkIn -and $null -eq $result.checkOut) 'Explicit unpunched cards should remain empty.'
 $result = Read-Fixture -Evening @('下班18:18', '18:20已打卡') -At ([datetimeoffset]::Parse('2026-11-05T18:25:00+08:00'))
 Assert-Condition ($result.accepted -and $result.pageStatus -ceq 'complete' -and $result.checkOut.precision -ceq 'minute') 'Complete current-day records should be accepted.'
+$result = Read-Fixture -Morning @('上 班 09 ： 00', '． 09 ： 18 已 打 卡') -Evening @('下 班 18 ： 18', '． 18 ： 22 已 打 卡') -Date @('下 班 打 卡', '1 1 月 5 日 周 四', '18 ： 23 ： 23') -At ([datetimeoffset]::Parse('2026-11-05T18:23:23+08:00'))
+$actualCheckout = [datetimeoffset]::Parse('2026-11-05T18:22:00+08:00').ToUnixTimeMilliseconds()
+Assert-Condition ($result.accepted -and $result.pageStatus -ceq 'complete') 'Observed checkout card OCR lines should form a complete shift.'
+Assert-Condition ($result.checkIn.epochMs -eq [datetimeoffset]::Parse('2026-11-05T09:18:00+08:00').ToUnixTimeMilliseconds() -and $result.checkOut.epochMs -eq $actualCheckout) 'Observed card lines should yield the actual 09:18 and 18:22 minute receipts.'
 
 $rejections = @(
     @{ Params = @{ Confirmed = $false }; Reason = 'attendance-page-unconfirmed' },
@@ -64,6 +68,7 @@ $rejections = @(
     @{ Params = @{ Morning = @('上班09:00', '11:18已打卡') }; Reason = 'check-in-time-in-future' },
     @{ Params = @{ Evening = @('下班18:18', '09:00已打卡') }; Reason = 'checkout-before-checkin' },
     @{ Params = @{ Evening = @('下班18:18', '18:18') }; Reason = 'check-out-status-unconfirmed' },
+    @{ Params = @{ Evening = @('下班18:18', '18:22已打卡更新打卡'); At = [datetimeoffset]::Parse('2026-11-05T18:23:23+08:00') }; Reason = 'check-out-status-unconfirmed' },
     @{ Params = @{ Date = @('上班打卡', '11月5日周四') }; Reason = 'attendance-action-record-conflict' }
 )
 foreach ($fixture in $rejections) {

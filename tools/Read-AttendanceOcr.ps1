@@ -111,8 +111,10 @@ try {
     }
 
     $failureStage = 'attendance-crop-ocr-failed'
-    $result.MorningLines = @(Read-CropLines $sourceImage @(92, 590, 518, 765) $engine)
-    $result.EveningLines = @(Read-CropLines $sourceImage @(540, 590, 992, 765) $engine)
+    # Keep the first glyph of both card headings. Narrow the right-hand card
+    # before its adjacent "update punch" action contaminates the receipt line.
+    $result.MorningLines = @(Read-CropLines $sourceImage @(44, 590, 518, 730) $engine)
+    $result.EveningLines = @(Read-CropLines $sourceImage @(506, 590, 806, 730) $engine)
     $result.DateLines = @(Read-CropLines $sourceImage @(310, 1320, 780, 1605) $engine)
     $result.OCRAvailable = $true
 } catch {
