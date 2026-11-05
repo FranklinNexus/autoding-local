@@ -341,9 +341,11 @@ try {
                     $record = $attempts[$attemptKey]
                     $resumed = $record.Contains('resumeRequested') -and $record.resumeRequested
                     if (!$resumed) {
+                        Resume-AppRequest ([int]$pendingRequest.kind) ([long]$pendingRequest.at)
+                        # A transient ADB or bridge failure leaves the same token
+                        # eligible for retry while the app's 120-second window lasts.
                         $record.resumeRequested = $true
                         Write-JsonFile $attemptPath $attempts
-                        Resume-AppRequest ([int]$pendingRequest.kind) ([long]$pendingRequest.at)
                         Write-Event 'resume' 'requested-within-launch-window' $attemptKey
                     }
                 }
