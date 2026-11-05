@@ -17,7 +17,14 @@ if (!(Test-Path -LiteralPath (Join-Path (Split-Path $PSScriptRoot) 'build\ui-dum
 }
 $account = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Limited
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $account
+# A console interruption can terminate a long-running task without activating
+# Task Scheduler's RestartCount. Re-try the launch every two minutes; IgnoreNew
+# below keeps a healthy watcher as the only instance.
+$repetitionTemplate = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 1)
+$recoveryTrigger = New-ScheduledTaskTrigger -Daily -At (Get-Date).AddMinutes(1)
+$recoveryTrigger.Repetition = $repetitionTemplate.Repetition
+$triggers = @($logonTrigger, $recoveryTrigger)
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 $settings.Hidden = $true
 $powerShellPath = (Get-Command pwsh).Source
@@ -31,6 +38,6 @@ foreach ($item in @(
     $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Mode {1} -Serial {2} -OutputDirectory "{3}"' -f $scriptPath, $item.Mode, $Serial, $outputPath
     if ($item.Mode -eq 'Unlock') { $arguments += ' -CredentialPath "' + $CredentialPath + '"' }
     $action = New-ScheduledTaskAction -Execute $powerShellPath -Argument $arguments -WorkingDirectory (Split-Path $PSScriptRoot)
-    Register-ScheduledTask -TaskName $item.Name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Local USB phone trial; runs only while this Windows user is logged in.' -Force | Out-Null
+    Register-ScheduledTask -TaskName $item.Name -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Description 'Local USB phone trial; runs only while this Windows user is logged in.' -Force | Out-Null
     Write-Output "Registered $($item.Name). Start it after stopping any manually launched copy."
 }

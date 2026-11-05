@@ -39,6 +39,7 @@
 ./test/Test-PhoneUnlock.ps1
 ./test/Test-UnlockRecovery.ps1
 ./test/Test-AppBridge.ps1
+./test/Test-FullDryRun.ps1
 ./build.ps1
 # 或：
 ./build.ps1 -SdkPath 'D:\Android\Sdk'
@@ -46,7 +47,7 @@
 
 安装包生成在 `build/AutoDing-local-test.apk`。首次构建生成本地测试签名密钥 `build/local-test.jks`，同一手机后续更新需沿用该密钥。默认密码仅用于本地测试。构建目录、密钥和设备证据已列入忽略规则。
 
-当前验证包括 6003 项原排程、2031 项实际考勤排程、49 项持久状态、60 项考勤观察解析、10 项 PIN 界面识别、11 项有限恢复和 16 项广播解析检查；CI 运行这些回归测试。检查次数属于算法和合成界面测试，设备兼容性、实际打卡及长期稳定性依赖实机证据。
+当前验证包括 6003 项原排程、2031 项实际考勤排程、49 项持久状态、60 项考勤观察解析、10 项 PIN 界面识别、11 项有限恢复、16 项广播解析和 23 项完整班次预演检查；CI 运行这些回归测试。预演用合成考勤回执与隔离的测试时钟，不会触碰真实钉钉。设备兼容性、实际打卡及长期稳定性依赖实机证据。
 
 ## Windows 三项本地任务
 
@@ -67,7 +68,7 @@ Start-ScheduledTask -TaskName AutoDingLocal-Attendance
 | `AutoDingLocal-Unlock` | 闹钟前 30 秒检查系统 PIN 界面并最多输入一次；解锁后可在 120 秒内恢复原启动。 |
 | `AutoDingLocal-Attendance` | 在确认的考勤页面本地读取签到/签退记录，回传已核实时间；已触发任务可从钉钉首页进入“打卡”页。 |
 
-安装前应停止同一手机手动启动的副本。任务只在当前用户已登录时运行；详细状态、停用、恢复及手动运行方式见 [docs/TRIAL.md](docs/TRIAL.md)。
+安装前应停止同一手机手动启动的副本。任务只在当前用户已登录时运行；登录后启动，另每两分钟检查一次退出的任务并重新启动，运行中的任务不会启动第二份。需要有意停止时先停用对应计划任务；详细状态、停用、恢复及手动运行方式见 [docs/TRIAL.md](docs/TRIAL.md)。
 
 ## PIN 与考勤读取
 

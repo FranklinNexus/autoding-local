@@ -32,3 +32,6 @@ jobs:
       - name: Check ADB broadcast reply parsing
         shell: pwsh
         run: ./test/Test-AppBridge.ps1
+      - name: Rehearse complete shift without device or attendance writes
+        shell: pwsh
+        run: ./test/Test-FullDryRun.ps1
