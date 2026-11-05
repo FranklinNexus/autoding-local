@@ -1,6 +1,6 @@
 #requires -Version 7.0
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Observe','Unlock')][string]$Mode,
+    [Parameter(Mandatory = $true)][ValidateSet('Observe','Unlock','Attendance')][string]$Mode,
     [Parameter(Mandatory = $true)][string]$Serial,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [string]$CredentialPath
@@ -14,7 +14,7 @@ function Write-TaskEvent([string]$Outcome, [string]$Message = '') {
 }
 try {
     Write-TaskEvent 'started'
-    $scriptName = if ($Mode -eq 'Observe') { 'Observe-Phone.ps1' } else { 'Watch-PhoneUnlock.ps1' }
+    $scriptName = switch ($Mode) { 'Observe' { 'Observe-Phone.ps1' } 'Unlock' { 'Watch-PhoneUnlock.ps1' } 'Attendance' { 'Watch-Attendance.ps1' } }
     $options = @{ Serial = $Serial; OutputDirectory = $OutputDirectory }
     if ($Mode -eq 'Unlock' -and $CredentialPath) { $options.CredentialPath = $CredentialPath }
     & (Join-Path $PSScriptRoot $scriptName) @options | Out-Null

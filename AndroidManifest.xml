@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="xcom.warof.chosen" android:versionCode="8" android:versionName="0.8-local">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="xcom.warof.chosen" android:versionCode="9" android:versionName="0.9-local">
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="33" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
@@ -9,11 +9,12 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <queries><package android:name="com.alibaba.android.rimet" /></queries>
-    <application android:label="AutoDing 本地测试" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:supportsRtl="true">
+    <application android:label="AutoDing Local" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask" android:showWhenLocked="true" android:turnScreenOn="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
         <receiver android:name=".AlarmReceiver" android:exported="false" />
+        <receiver android:name=".BridgeReceiver" android:exported="true" android:permission="android.permission.DUMP" />
         <service android:name=".AlarmService" android:exported="false" />
         <service android:name=".WatchService" android:exported="false" />
         <receiver android:name=".RestoreReceiver" android:exported="false">

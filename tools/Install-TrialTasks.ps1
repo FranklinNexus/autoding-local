@@ -23,7 +23,8 @@ $settings.Hidden = $true
 $powerShellPath = (Get-Command pwsh).Source
 foreach ($item in @(
     @{ Name = 'AutoDingLocal-Observe'; Mode = 'Observe'; Folder = 'AutoDing-trial' },
-    @{ Name = 'AutoDingLocal-Unlock'; Mode = 'Unlock'; Folder = 'AutoDing-unlock' }
+    @{ Name = 'AutoDingLocal-Unlock'; Mode = 'Unlock'; Folder = 'AutoDing-unlock' },
+    @{ Name = 'AutoDingLocal-Attendance'; Mode = 'Attendance'; Folder = 'AutoDing-attendance' }
 )) {
     $scriptPath = Join-Path $PSScriptRoot 'Run-TrialTask.ps1'
     $outputPath = Join-Path $LogDirectory $item.Folder

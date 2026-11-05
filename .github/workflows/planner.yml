@@ -20,3 +20,15 @@ jobs:
       - name: Check PIN screen recognition with synthetic fixtures
         shell: pwsh
         run: ./test/Test-PhoneUnlock.ps1
+      - name: Check persisted schedule state
+        shell: pwsh
+        run: ./test/Test-SchedulerState.ps1
+      - name: Check attendance observation parsing
+        shell: pwsh
+        run: ./test/Test-AttendanceScreen.ps1
+      - name: Check bounded unlock recovery
+        shell: pwsh
+        run: ./test/Test-UnlockRecovery.ps1
+      - name: Check ADB broadcast reply parsing
+        shell: pwsh
+        run: ./test/Test-AppBridge.ps1

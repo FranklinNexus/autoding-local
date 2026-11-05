@@ -1,0 +1,2 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+package org.json;import java.util.*;public class JSONObject {public final Map<String,Object> data=new LinkedHashMap<>();public JSONObject put(String k,Object v){data.put(k,v);return this;}public Object get(String k){return data.get(k);}public String toString(){return data.toString();}}

@@ -1,0 +1,2 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+package android.app;import java.util.*;public class AlarmManager {public final Map<Integer,Long> scheduled=new HashMap<>();public boolean canScheduleExactAlarms(){return true;}public static class AlarmClockInfo {public long at;public AlarmClockInfo(long a,PendingIntent p){at=a;}}public void setAlarmClock(AlarmClockInfo info,PendingIntent p){scheduled.put(p.id,info.at);}public void cancel(PendingIntent p){scheduled.remove(p.id);}}

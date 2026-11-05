@@ -48,16 +48,13 @@ public final class AlarmService extends Service {
         }, 800);
         handler.postDelayed(() -> {
             if (Scheduler.prefs(this).getLong("fired_" + kind, 0) == at) {
-                Scheduler.log(this, "触发后10秒仍未收到页面启动确认；当前锁屏=" + keyguard.isKeyguardLocked() + "，请检查系统启动限制及锁屏");
+                Scheduler.log(this, "触发后10秒仍未完成钉钉启动请求；当前锁屏=" + keyguard.isKeyguardLocked() + "，请检查系统启动限制及锁屏");
             }
         }, 10000);
         handler.postDelayed(() -> {
-            if (Scheduler.prefs(this).getLong("fired_" + kind, 0) == at) {
-                Scheduler.prefs(this).edit().remove("fired_" + kind).commit();
-                Scheduler.log(this, "本次定时启动超时，已清除待处理请求；考勤待核实");
-            }
+            Scheduler.expirePending(this, kind, at);
             stopForeground(true); stopSelf();
-        }, Scheduler.LAUNCH_WINDOW_MS);
+        }, Math.max(1, at + Scheduler.LAUNCH_WINDOW_MS + 1 - System.currentTimeMillis()));
         return START_NOT_STICKY;
     }
     @Override public void onDestroy() {

@@ -1,0 +1,2 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+package android.util;public class Log{public static int i(String tag,String msg){return 0;}public static int w(String tag,String msg){return 0;}}

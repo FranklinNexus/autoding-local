@@ -9,6 +9,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'AppBridge.psm1') -Force
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Run this tool on Windows.' }
 if (!$env:LOCALAPPDATA) { throw 'LOCALAPPDATA is unavailable.' }
 if (!$CredentialPath) {
@@ -145,6 +146,23 @@ function Get-AlarmTimes([TimeZoneInfo]$PhoneZone) {
         $utcTime = [TimeZoneInfo]::ConvertTimeToUtc([datetime]::SpecifyKind($localTime, [DateTimeKind]::Unspecified), $PhoneZone)
         ([datetimeoffset]$utcTime).ToUnixTimeSeconds()
     } | Sort-Object -Unique)
+}
+function Read-AppState {
+    $reply = Invoke-Adb @('shell', 'am', 'broadcast', '-n', 'xcom.warof.chosen/.BridgeReceiver', '-a', 'xcom.warof.chosen.STATE')
+    return ConvertFrom-AppBridgeReply -Response $reply
+}
+function Test-PinQuotaConsumed([object]$Record) {
+    return $null -ne $Record -and $Record.outcome -notin @('already-unlocked','unlocked-before-pin','no-input')
+}
+function Get-RecoverablePending([object[]]$Pending, [long]$PhoneNow) {
+    # The app bridge has already validated its exact millisecond launch window.
+    # One second of forward tolerance covers reading the phone's integer clock first.
+    return @($Pending | Where-Object { $_.at -le ($PhoneNow + 1) * 1000 -and $_.at -ge ($PhoneNow - 120) * 1000 })
+}
+function Resume-AppRequest([int]$Kind, [long]$At) {
+    $reply = Invoke-Adb @('shell', 'am', 'broadcast', '-n', 'xcom.warof.chosen/.BridgeReceiver', '-a', 'xcom.warof.chosen.RESUME', '--ei', 'kind', [string]$Kind, '--el', 'scheduled_at', [string]$At)
+    $result = ConvertFrom-AppBridgeReply -Response $reply
+    if ($result.outcome -cne 'resumed') { throw 'App resume request was not resumed.' }
 }
 function Set-Blocked([string]$Reason, [string]$AttemptKey) {
     Write-JsonFile $blockPath ([ordered]@{ capturedAt = [datetimeoffset]::Now.ToString('o'); serial = $Serial; reason = $Reason; attemptKey = $AttemptKey })
@@ -293,17 +311,42 @@ try {
             $alarmTimes = @(Get-AlarmTimes $zone)
             $status.nextAlarms = @($alarmTimes | ForEach-Object { [TimeZoneInfo]::ConvertTime([datetimeoffset]::FromUnixTimeSeconds($_), $zone).ToString('o') })
             $due = @($alarmTimes | Where-Object { $_ -ge $phoneNow -and $_ -le $phoneNow + 30 })
+            $pending = @()
+            if (!$TestOnce) {
+                $appState = Read-AppState
+                $pending = @(Get-RecoverablePending @($appState.pending) $phoneNow)
+            }
+            $pendingRequest = if ($pending.Count) { $pending[0] } else { $null }
             $attemptKey = if ($TestOnce) { 'test-' + [guid]::NewGuid().ToString('N') }
+                elseif ($pendingRequest) { 'alarm-' + [string][long][Math]::Floor($pendingRequest.at / 1000) }
                 elseif ($due.Count) { 'alarm-' + [string]$due[0] } else { '' }
-            if ($attemptKey -and !$attempts.ContainsKey($attemptKey)) {
-                # Persist before touching the phone; restart will not repeat this alarm.
-                $attempts[$attemptKey] = [ordered]@{ startedAt = [datetimeoffset]::Now.ToString('o'); outcome = 'started' }
-                Write-JsonFile $attemptPath $attempts
-                Write-Event 'attempt' 'started' $attemptKey
-                $lastOutcome = Invoke-Unlock $attemptKey $credential.Secret
-                $attempts[$attemptKey].outcome = $lastOutcome
-                Write-JsonFile $attemptPath $attempts
+            if ($attemptKey) {
+                $record = if ($attempts.ContainsKey($attemptKey)) { $attempts[$attemptKey] } else { $null }
+                $consumed = Test-PinQuotaConsumed $record
+                if (!$state.Locked) {
+                    # An unlocked observation never consumes the one PIN attempt.
+                    $lastOutcome = 'already-unlocked'
+                    if (!$state.Interactive) { [void](Invoke-Adb @('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')) }
+                } elseif (!$consumed) {
+                    $attempts[$attemptKey] = [ordered]@{ startedAt = [datetimeoffset]::Now.ToString('o'); outcome = 'started'; resumeRequested = $false }
+                    Write-JsonFile $attemptPath $attempts
+                    Write-Event 'attempt' 'started' $attemptKey
+                    $lastOutcome = Invoke-Unlock $attemptKey $credential.Secret
+                    $attempts[$attemptKey].outcome = $lastOutcome
+                    Write-JsonFile $attemptPath $attempts
+                } else { $lastOutcome = 'pin-attempt-already-consumed' }
                 $status.locked = (Read-Keyguard).Locked
+                if ($pendingRequest -and !$status.locked -and !(Test-Path -LiteralPath $blockPath)) {
+                    if (!$attempts.ContainsKey($attemptKey)) { $attempts[$attemptKey] = [ordered]@{ outcome = 'no-input'; resumeRequested = $false } }
+                    $record = $attempts[$attemptKey]
+                    $resumed = $record.Contains('resumeRequested') -and $record.resumeRequested
+                    if (!$resumed) {
+                        $record.resumeRequested = $true
+                        Write-JsonFile $attemptPath $attempts
+                        Resume-AppRequest ([int]$pendingRequest.kind) ([long]$pendingRequest.at)
+                        Write-Event 'resume' 'requested-within-launch-window' $attemptKey
+                    }
+                }
             }
             $status.blocked = Test-Path -LiteralPath $blockPath
             $status.outcome = $lastOutcome

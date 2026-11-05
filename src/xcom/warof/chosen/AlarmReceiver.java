@@ -10,10 +10,8 @@ public final class AlarmReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context c, Intent i) {
         int kind = i.getIntExtra("kind", -1);
         if (kind != Scheduler.TEST && kind != Scheduler.MORNING && kind != Scheduler.EVENING) return;
-        if (kind != Scheduler.TEST && !Scheduler.prefs(c).getBoolean("enabled", false)) return;
         long at = i.getLongExtra("scheduled_at", 0);
-        if (at == 0 || Scheduler.prefs(c).getLong("next_" + kind, 0) != at) return;
-        Scheduler.prefs(c).edit().remove("next_" + kind).putLong("fired_" + kind, at).commit();
+        if (!Scheduler.claim(c, kind, at)) return;
         if (kind != Scheduler.TEST) {
             try { Scheduler.scheduleDaily(c, kind, true); }
             catch (RuntimeException e) { Scheduler.log(c, "下次排程失败，请检查定时权限"); }

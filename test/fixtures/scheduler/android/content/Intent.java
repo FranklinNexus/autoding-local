@@ -1,0 +1,2 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+package android.content;import java.util.*;public class Intent {public static final String ACTION_MAIN="main";public int flags;public String action;public Class<?> target;public final Map<String,Object> extras=new HashMap<>();public Intent(Context c,Class<?> cls){target=cls;}public Intent setAction(String s){action=s;return this;}public Intent addFlags(int f){flags|=f;return this;}public Intent putExtra(String k,int v){extras.put(k,v);return this;}public Intent putExtra(String k,long v){extras.put(k,v);return this;}}

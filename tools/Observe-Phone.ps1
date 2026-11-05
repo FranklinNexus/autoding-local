@@ -1,3 +1,4 @@
+#requires -Version 7.0
 param(
     [string]$AdbPath,
     [string]$Serial,
@@ -7,6 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'AppBridge.psm1') -Force
 if (!$AdbPath) {
     $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
     if ($adbCommand) { $AdbPath = $adbCommand.Source }
@@ -47,9 +49,19 @@ if (!$Once) {
 }
 
 function Read-Adb([string[]]$AdbArguments) {
-    $lines = & $AdbPath @deviceArguments @AdbArguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "ADB exited $LASTEXITCODE while running $($AdbArguments[0])." }
-    return ($lines -join "`n")
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $AdbPath; $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+    foreach ($argument in ($deviceArguments + $AdbArguments)) { $info.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::new(); $process.StartInfo = $info
+    try {
+        [void]$process.Start()
+        $outputTask = $process.StandardOutput.ReadToEndAsync(); $errorTask = $process.StandardError.ReadToEndAsync()
+        if (!$process.WaitForExit(20000)) { $process.Kill($true); throw 'ADB status collection timed out.' }
+        if ($process.ExitCode -ne 0) { throw "ADB status command failed: $($AdbArguments[0])." }
+        [void]$errorTask.GetAwaiter().GetResult()
+        return $outputTask.GetAwaiter().GetResult()
+    } finally { $process.Dispose() }
 }
 function Drain-EventCapture {
     while ($script:eventReadTask -and $script:eventReadTask.IsCompleted) {
@@ -108,7 +120,7 @@ try {
                 powered = $null; batteryPercent = $null; wakefulness = $null
                 stayAwakeWhilePlugged = $null; keyguardLocked = $null
                 watchServiceRunning = $null; dingForeground = $null
-                upcomingTimers = @(); concerns = @()
+                upcomingTimers = @(); appState = $null; concerns = @()
             }
             try {
                 if ((Read-Adb @('get-state')).Trim() -ne 'device') { throw 'Device is not ready.' }
@@ -129,11 +141,16 @@ try {
                 $snapshot.dingForeground = $windows -match '(?m)mCurrentFocus=.*com\.alibaba\.android\.rimet/'
                 $timerMatches = [regex]::Matches($alarms, 'tag=\*walarm\*:xcom\.warof\.chosen\.LOCAL_ALARM\s+type=RTC_WAKEUP origWhen=(?<at>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)')
                 $snapshot.upcomingTimers = @($timerMatches | ForEach-Object { $_.Groups['at'].Value } | Sort-Object -Unique)
+                try {
+                    $reply = Read-Adb @('shell','am','broadcast','-n','xcom.warof.chosen/.BridgeReceiver','-a','xcom.warof.chosen.STATE')
+                    $snapshot.appState = ConvertFrom-AppBridgeReply -Response $reply
+                    if ($snapshot.appState.stageMorning -in @('unverified','missed') -or $snapshot.appState.stageEvening -in @('unverified','missed')) { $snapshot.concerns += 'attendance-result-needs-review' }
+                } catch { $snapshot.concerns += 'app-state-unavailable' }
                 if (!$snapshot.powered) { $snapshot.concerns += 'not-powered' }
                 if ($snapshot.wakefulness -ne 'Awake') { $snapshot.concerns += 'screen-not-awake' }
                 if ($snapshot.keyguardLocked) { $snapshot.concerns += 'keyguard-locked' }
                 if (!$snapshot.watchServiceRunning) { $snapshot.concerns += 'watch-service-missing' }
-                if ($snapshot.upcomingTimers.Count -eq 0) { $snapshot.concerns += 'no-future-timers' }
+                if ($snapshot.upcomingTimers.Count -eq 0 -and $snapshot.appState -and $snapshot.appState.enabled) { $snapshot.concerns += 'no-future-timers' }
             } catch {
                 $snapshot.concerns += 'collection-error'; $snapshot.error = $_.Exception.Message
                 Add-Content -LiteralPath (Join-Path $OutputDirectory 'collector-errors.txt') -Encoding UTF8 -Value "$([datetimeoffset]::Now.ToString('o')) $($_.Exception.Message)"

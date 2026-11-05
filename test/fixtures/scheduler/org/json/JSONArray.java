@@ -1,0 +1,2 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+package org.json;import java.util.*;public class JSONArray {public final List<Object> data=new ArrayList<>();public JSONArray put(Object v){data.add(v);return this;}}
