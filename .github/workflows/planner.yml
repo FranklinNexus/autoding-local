@@ -17,3 +17,6 @@ jobs:
       - name: Check schedule calculations
         shell: pwsh
         run: ./test.ps1
+      - name: Check PIN screen recognition with synthetic fixtures
+        shell: pwsh
+        run: ./test/Test-PhoneUnlock.ps1

@@ -14,6 +14,7 @@ import java.util.TimeZone;
 
 final class Scheduler {
     static final int MORNING = 100, EVENING = 101, TEST = 200;
+    static final long LAUNCH_WINDOW_MS = 120000;
     static SharedPreferences prefs(Context c) { return c.getSharedPreferences("local_schedule", Context.MODE_PRIVATE); }
     static AlarmManager manager(Context c) { return (AlarmManager)c.getSystemService(Context.ALARM_SERVICE); }
     static boolean exactAllowed(Context c) { return android.os.Build.VERSION.SDK_INT < 31 || manager(c).canScheduleExactAlarms(); }

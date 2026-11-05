@@ -31,6 +31,7 @@ public final class MainActivity extends Activity {
     private int morning, evening;
     private boolean opening;
     private boolean pendingOpen;
+    private long pendingDeadline;
     private final Handler handler = new Handler(android.os.Looper.getMainLooper());
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
@@ -48,6 +49,10 @@ public final class MainActivity extends Activity {
         refresh();
         if (pendingOpen) { pendingOpen = false; launchDing(); }
     }
+    @Override protected void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
+        super.onDestroy();
+    }
     @Override protected void onNewIntent(Intent i) {
         super.onNewIntent(i); setIntent(i);
         acceptAlarm(i);
@@ -60,11 +65,19 @@ public final class MainActivity extends Activity {
             || expected != Scheduler.prefs(this).getLong("fired_" + kind, 0)) return;
         if (kind != Scheduler.TEST && !Scheduler.prefs(this).getBoolean("enabled", false)) return;
         Scheduler.prefs(this).edit().remove("fired_" + kind).commit();
-        Scheduler.log(this, (kind == Scheduler.TEST ? "测试" : kind == Scheduler.MORNING ? "上班" : "下班") + "定时器已触发，页面已启动");
-        pendingOpen = true;
         stopService(new Intent(this, AlarmService.class));
         ((android.app.NotificationManager)getSystemService(NOTIFICATION_SERVICE)).cancel(AlarmService.NOTICE);
         i.setAction(Intent.ACTION_MAIN);
+        long now = System.currentTimeMillis();
+        if (now < expected || now - expected > Scheduler.LAUNCH_WINDOW_MS) {
+            pendingOpen = false;
+            pendingDeadline = 0;
+            Scheduler.log(this, "定时启动请求已过期，已清除；请核对本次考勤记录");
+            return;
+        }
+        Scheduler.log(this, (kind == Scheduler.TEST ? "测试" : kind == Scheduler.MORNING ? "上班" : "下班") + "定时器已触发，页面已启动");
+        pendingDeadline = expected + Scheduler.LAUNCH_WINDOW_MS;
+        pendingOpen = true;
     }
     private int dp(int n) { return (int)(getResources().getDisplayMetrics().density * n + .5f); }
     private void buildUi() {
@@ -86,7 +99,7 @@ public final class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT >= 26) startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
             else startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
         });
-        button(col, "立即打开钉钉", v -> launchDing());
+        button(col, "立即打开钉钉", v -> { pendingDeadline = 0; launchDing(); });
         button(col, "60 秒后测试一次", v -> {
             if (!checkPermissions()) return;
             try { long at = System.currentTimeMillis() + 60000; Scheduler.schedule(this, Scheduler.TEST, at); WatchService.start(this); Scheduler.log(this, "已安排一次测试：" + Scheduler.stamp(at)); refresh(); toast("可以回桌面等待测试；请保持充电亮屏"); }
@@ -129,6 +142,9 @@ public final class MainActivity extends Activity {
     }
     private void refresh() {
         StringBuilder s = new StringBuilder("精确定时：").append(Scheduler.exactAllowed(this) ? "已允许" : "待设置").append("　后台显示：").append(Settings.canDrawOverlays(this) ? "已允许" : "待设置");
+        KeyguardManager keyguard = (KeyguardManager)getSystemService(KEYGUARD_SERVICE);
+        s.append("\n手机状态：").append(keyguard.isKeyguardLocked() ? "已锁定，请在手机上解锁" : "已解锁");
+        s.append("\n请保持供电、亮屏和解锁；亮屏仍可能处于锁屏界面。");
         s.append("\n通知：").append(Build.VERSION.SDK_INT < 24 || ((android.app.NotificationManager)getSystemService(NOTIFICATION_SERVICE)).areNotificationsEnabled() ? "已允许" : "待设置");
         long test = Scheduler.prefs(this).getLong("next_" + Scheduler.TEST, 0);
         if (test > 0) s.append("\n一次测试：").append(Scheduler.stamp(test));
@@ -163,12 +179,16 @@ public final class MainActivity extends Activity {
     private void openAfterWake() {
         handler.postDelayed(() -> {
             try {
+                if (pendingDeadline > 0 && System.currentTimeMillis() > pendingDeadline) {
+                    Scheduler.log(this, "定时启动请求已过期，请核对本次考勤记录");
+                    return;
+                }
                 Intent target = getPackageManager().getLaunchIntentForPackage("com.alibaba.android.rimet");
                 if (target == null) { Scheduler.log(this, "未找到钉钉，请检查是否已安装"); return; }
                 startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                 Scheduler.log(this, "已发出打开钉钉请求；考勤结果待核实");
             } catch (RuntimeException e) { Scheduler.log(this, "打开钉钉出错：" + e.getClass().getSimpleName()); }
-            finally { opening = false; refresh(); }
+            finally { pendingDeadline = 0; opening = false; refresh(); }
         }, 1200);
     }
 }

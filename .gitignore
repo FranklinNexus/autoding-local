@@ -4,6 +4,13 @@
 /local.properties
 *.jks
 *.keystore
+*.clixml
+unlock.blocked.json
+attempts.json
+status.json
+watcher.lock
+watcher.pid
+stop.request
 *.apk
 *.apk.idsig
 *.pem
