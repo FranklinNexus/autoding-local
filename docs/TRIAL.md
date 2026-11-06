@@ -1,6 +1,6 @@
 # 实机试用与故障核对
 
-运行证据保存在本地目录，仓库仅维护复现方法与去除个人信息后的结论。当前版本 0.9-local 已安装；验证范围限于一台华为 JEF-AN00、HarmonyOS 4.2、Android API 31、钉钉 9.0.5、1080×2400 竖屏布局。
+运行证据保存在本地目录，仓库仅维护复现方法与去除个人信息后的结论。当前公开目标为 `0.10.0-preview.1`（Android `0.10-preview`），下述现场证据主要来自此前 0.9-local 试用。验证范围限于一台华为 JEF-AN00、HarmonyOS 4.2、Android API 31、钉钉 9.0.5、1080×2400 竖屏布局；其他设备按 [兼容矩阵](COMPATIBILITY.md) 逐项验收。
 
 ## 从实际签到计算签退
 
@@ -19,7 +19,8 @@
 ```powershell
 ./tools/Build-UiDump.ps1
 pwsh -STA -File ./tools/Set-PhoneUnlock.ps1 -Serial SERIAL
-./tools/Install-TrialTasks.ps1 -Serial SERIAL -LogDirectory 'D:\AutoDing-logs'
+$trialLogs = Join-Path $env:LOCALAPPDATA 'AutoDingLocal\logs'
+./tools/Install-TrialTasks.ps1 -Serial SERIAL -LogDirectory $trialLogs
 Start-ScheduledTask -TaskName AutoDingLocal-Observe
 Start-ScheduledTask -TaskName AutoDingLocal-Unlock
 Start-ScheduledTask -TaskName AutoDingLocal-Attendance
@@ -28,11 +29,13 @@ Get-ScheduledTask -TaskName 'AutoDingLocal-*' | Select-Object TaskName, State
 
 安装前停止手动运行的同一手机副本。三个任务在当前用户登录时启动，不保存 Windows 密码；`Observe` 负责状态与事件，`Unlock` 负责有限 PIN 解锁与原请求恢复，`Attendance` 负责当前钉钉考勤页的实际记录。必要时可向安装脚本传入 `-CredentialPath`，应与本地 PIN 设置窗口使用同一路径且位于仓库外。
 
+手机保持已解锁、无需 PIN 辅助时，安装命令使用 `-SkipUnlock`，只注册 Observe 和 Attendance，跳过凭据要求。已有 Unlock 任务仍会保留，切换方式需显式停用并停止 `AutoDingLocal-Unlock`。UI helper 的 API 23 回退读取路径只有合成测试证据，连接时会临时抑制其他无障碍服务；API 24 以上采用 `connect(1)`，详见 [兼容说明](COMPATIBILITY.md#pin-适配)。
+
 手动单次检查方式：
 
 ```powershell
-./tools/Observe-Phone.ps1 -Serial SERIAL -Once -OutputDirectory 'D:\AutoDing-logs\AutoDing-trial'
-./tools/Watch-Attendance.ps1 -Serial SERIAL -Once -OutputDirectory 'D:\AutoDing-logs\AutoDing-attendance'
+./tools/Observe-Phone.ps1 -Serial SERIAL -Once -OutputDirectory (Join-Path $trialLogs 'AutoDing-trial')
+./tools/Watch-Attendance.ps1 -Serial SERIAL -Once -OutputDirectory (Join-Path $trialLogs 'AutoDing-attendance')
 ```
 
 Attendance 常规模式每约 30 秒检查一次。当钉钉首页前台、App 记录显示本次任务已经触发时，它可点击已核实的“打卡”快捷入口；`-NavigateToAttendance` 用于显式单次页面导航。它不会将“预计签退”或“未打卡”当成实际记录。
@@ -66,7 +69,7 @@ Unlock 在本 App 闹钟前 30 秒唤醒手机，确认系统安全锁屏、空�
 
 ## OCR 范围与临时数据
 
-考勤读取使用 Windows 本地简体中文 OCR，须已安装 `zh-Hans` 识别语言；当前只适配已验证的华为 **1080×2400 竖屏钉钉考勤布局**。先核对钉钉前台和“打卡 / 统计 / 设置”页签，再识别签到、签退、日期三个指定区域。页面、布局或日期不匹配时保持待核实；其他手机、分辨率和钉钉版本需另外适配。
+考勤读取使用 Windows 本地简体中文 OCR，须已安装 `zh-Hans` 识别语言；当前实测是华为 **1080×2400 竖屏钉钉考勤布局**。先核对钉钉前台和“打卡 / 统计 / 设置”页签，再识别签到、签退、日期三个指定区域。`-LayoutPath` 支持 JSON 参考布局和分辨率比例缩放，非内置配置或缩放尺寸默认阻断自动回传；本地验收后才使用 `-AcceptUnverifiedLayout`。同分辨率的其他机型也需人工验证，格式和诊断见 [兼容说明](COMPATIBILITY.md#ocr-布局适配)。
 
 自动 OCR 仅核对当天回执；昨日签到、今晨跨夜签退需人工核对并在 App 确认。Android 排程算法支持跨夜，自动读取组件尚未覆盖跨夜回执布局。
 
@@ -77,9 +80,10 @@ Unlock 在本 App 闹钟前 30 秒唤醒手机，确认系统安全锁屏、空�
 前台脚本可按 Ctrl+C。后台任务可在对应输出目录创建 `stop.request`，等待脚本退出并释放子进程；下次启动前删除停止标志。例如：
 
 ```powershell
-New-Item -ItemType File 'D:\AutoDing-logs\AutoDing-trial\stop.request'
-Stop-ScheduledTask -TaskName AutoDingLocal-Observe
 Disable-ScheduledTask -TaskName AutoDingLocal-Observe
+New-Item -ItemType File (Join-Path $trialLogs 'AutoDing-trial\stop.request')
+# 等待脚本清理退出；确需强制停止时：
+Stop-ScheduledTask -TaskName AutoDingLocal-Observe
 ```
 
 对 Unlock、Attendance 使用各自目录与任务名。安装脚本还设置每两分钟的重新启动触发器，运行中的任务由 IgnoreNew 保持单实例。需要有意停止时停用对应计划任务，避免停止标志引起周期性空转；优先让脚本看到停止标志后退出。任务停用只影响电脑组件，手机日常排程须在 App 内另行停用。凭据阻断文件不是停止标志，应按前述步骤单独处理。
@@ -90,6 +94,14 @@ Disable-ScheduledTask -TaskName AutoDingLocal-Observe
 
 2026-11-05 首次隔夜：系统闹钟按时触发并显示提醒，但手机保持密码锁定，未完成启动页面和钉钉前台链路；用户手动打开钉钉后才成功打卡。锁屏期间底层启动限制的具体判定未保留下来。当天手动打开 AutoDing 还消费了积压请求，后续版本增加 120 秒过期保护。电脑采集曾有短暂空档，已重启。
 
-随后两次 USB PIN 辅助实测均从锁屏解除到定时打开钉钉通过，其中一次由 Windows 后台任务接管；两次均确认钉钉前台，未将启动证据当成独立实际打卡结果。0.9 已安装，已从当前考勤页确认实际签到，按签到与 540 分钟规则保存签退时间；当前界面读取与回执链路已通过现场核对。新版另完成两次锁屏启动测试，其中一次在闹钟触发后恢复已停用的电脑解锁组件，在原 120 秒窗口内解锁并续接，重复恢复请求返回 not-pending；该测试模拟组件中断，未实际拔插 USB。重复读取签到返回 unchanged，保存的签退时间保持不变。今晚真实签退、连续多日、实际 USB 重连、整机重启和其他设备仍待验证。
+随后两次 USB PIN 辅助实测均从锁屏解除到定时打开钉钉通过，其中一次由 Windows 后台任务接管；两次均确认钉钉前台，未将启动证据当成独立实际打卡结果。0.9 另完成两次锁屏启动测试，其中一次在闹钟触发后恢复已停用的电脑解锁组件，在原 120 秒窗口内解锁并续接，重复恢复请求返回 not-pending；该测试模拟组件中断，未实际拔插 USB。重复读取签到返回 unchanged，保存的签退时间保持不变。
 
-代码回归包括 **6003 项原排程＋2031 项实际考勤排程、49 项持久状态、60 项考勤观察解析、10 项 PIN 界面识别、11 项有限恢复、16 项广播解析、23 项完整班次预演**。预演使用合成的 09:18/18:22 回执和隔离测试时钟，经过排程、闹钟领取、锁屏续接、启动请求和实际回执确认，不会打开真实钉钉。这些数量未代表相同次数的实机打卡，今晚真实签退仍待单独验收。
+11 月 5 日正式签退：保存的计划于 18:22:08 触发，18:22:10 请求打开钉钉，钉钉官方工作通知确认 **18:22 极速签退成功**。最初 OCR 裁剪漏掉卡片首字并混入相邻操作文字，出现短暂待核实；修正裁剪后于 18:25 首次确认签退，后续读取返回 unchanged。实际签退已验证，修正后无干预的完整回执闭环仍需下一工作日复验。
+
+11 月 6 日正式签到：官方工作通知和当日统计均确认 **07:00 极速签到成功**，统计显示极速打卡且一次签到。07:00:02 电脑读取该回执，07:00:06 App 确认，因此取消原定 08:56:13 的晨班启动，推进到下一工作日。今晨不是 08:56 定时失败后补打，07:00 也不是该稍后闹钟触发；手机通宵亮屏、已解锁且钉钉前台是提前极速打卡的主要线索，具体官方触发机制尚待复验。
+
+午夜曾观察到未来签到候选，解析器在时钟到达后可接受相同文字。独立官方通知和统计证明此次 07:00 实际成功，但仍暴露跨日停留页面的读取一致性边界：未来候选应隔离，并结合刷新页面或独立记录核对。原始 OCR 未持久保存，不据此声称已精确还原午夜画面。此边界仍需后续回归与现场验证。
+
+连续多日、实际 USB 重连、整机重启和其他设备仍待验证。预发布提供可复现工具和当前证据，不将单次成功推广为全机型或长期稳定性保证。
+
+回归覆盖原排程、实际考勤排程、持久状态、考勤观察解析、PIN 界面识别、有限恢复、广播解析和完整班次预演。预演使用合成的 09:18/18:22 回执与隔离测试时钟，经过排程、闹钟领取、锁屏续接、启动请求和回执确认，不会打开真实钉钉。具体检查数以本版本脚本输出和 CI 为准；这些数量未代表相同次数的实机打卡。新增布局或设备应提交脱敏兼容记录，格式见 [COMPATIBILITY.md](COMPATIBILITY.md#贡献一条可复核的兼容记录)。

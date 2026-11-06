@@ -20,6 +20,14 @@ try {
     }
     $javaPath = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME 'bin' } else { Split-Path (Get-Command javac).Source }
     $buildPath = Join-Path $PSScriptRoot 'build'
+    # Remove only generated compilation directories. Keep the signing key so
+    # the next local build can still update an existing installation.
+    foreach ($name in @('classes', 'dex')) {
+        $generated = [IO.Path]::GetFullPath((Join-Path $buildPath $name))
+        $expected = [IO.Path]::GetFullPath($buildPath) + [IO.Path]::DirectorySeparatorChar
+        if (!$generated.StartsWith($expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected build output path.' }
+        if (Test-Path -LiteralPath $generated) { Remove-Item -LiteralPath $generated -Recurse -Force }
+    }
     New-Item -ItemType Directory -Force -Path $buildPath,(Join-Path $buildPath 'classes'),(Join-Path $buildPath 'dex') | Out-Null
     $sources = @(Get-ChildItem -Recurse -Filter '*.java' src | ForEach-Object { $_.FullName })
     $compileBootPath = (Join-Path $toolsPath 'core-lambda-stubs.jar') + [System.IO.Path]::PathSeparator + $androidJar

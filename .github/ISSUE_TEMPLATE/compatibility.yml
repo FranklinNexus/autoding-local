@@ -1,0 +1,131 @@
+name: 设备兼容性实测反馈
+description: 记录具体环境和已完成的实测阶段，帮助定位适配范围。
+title: "[兼容性] 手机型号 / 已实测阶段"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请只报告实际验证结果；未测试、未知或未使用的项目直接填写对应状态。
+        请勿上传 PIN、密钥、凭据文件、姓名、位置、设备 serial 或原始考勤截图。日志和配置片段请先脱敏，LayoutPath 仅描述是否使用及适配情况，无需填写本机完整路径。
+        定时触发、打开钉钉和官方考勤成功是不同阶段，请分别核对。
+  - type: input
+    id: app_version
+    attributes:
+      label: AutoDing 版本或提交
+      placeholder: "例如：0.10.0-preview.1 / 提交号；未知可填未知"
+    validations:
+      required: true
+  - type: input
+    id: device_model
+    attributes:
+      label: 手机厂商与型号
+      description: 填型号即可，请勿填写设备 serial、IMEI 或账号。
+      placeholder: "例如：华为 JEF-AN00；未知可填未知"
+    validations:
+      required: true
+  - type: input
+    id: android_system
+    attributes:
+      label: Android 版本 / API / 厂商系统版本
+      placeholder: "例如：Android API 31 / HarmonyOS 4.2；各项未知可填未知"
+    validations:
+      required: true
+  - type: input
+    id: ding_version
+    attributes:
+      label: 钉钉版本
+      placeholder: "例如：9.0.5；未知可填未知"
+    validations:
+      required: true
+  - type: textarea
+    id: windows_environment
+    attributes:
+      label: Windows / PowerShell / OCR 环境
+      description: 分别填写 Windows 版本、PowerShell 版本、OCR 组件版本或识别语言。手机单独运行可填未使用；未知可填未知。
+      placeholder: |
+        Windows：
+        PowerShell：
+        OCR 组件版本 / 语言：
+    validations:
+      required: true
+  - type: dropdown
+    id: modes
+    attributes:
+      label: 本次实际运行模式
+      description: 可多选，只选择实际运行过的组件。
+      multiple: true
+      options:
+        - Android-only（手机单独运行）
+        - Windows Observe（状态与日志采集）
+        - Windows Unlock（USB 辅助解锁）
+        - Windows Attendance（考勤页读取）
+        - 未测试 / 未知
+    validations:
+      required: true
+  - type: dropdown
+    id: adb_connection
+    attributes:
+      label: ADB 连接实测
+      options:
+        - 已连接且设备显示 device
+        - 显示 unauthorized / offline / 未找到设备
+        - 未使用 ADB
+        - 未测试 / 未知
+    validations:
+      required: true
+  - type: dropdown
+    id: pin_controls
+    attributes:
+      label: 系统 PIN 控件识别情况
+      description: 仅说明界面类型和识别结果，请勿填写 PIN 内容。
+      options:
+        - 标准系统 PIN 控件，组件已识别
+        - 标准系统 PIN 控件，组件未识别
+        - 其他锁屏类型
+        - 未使用辅助解锁
+        - 未测试 / 未知
+    validations:
+      required: true
+  - type: textarea
+    id: background_layout
+    attributes:
+      label: 后台限制与屏幕布局
+      description: 逐项记录已检查的设置；未知可填未知。LayoutPath 仅填默认 / 自定义及适配结果，请勿贴带用户名的本机路径。
+      placeholder: |
+        精确定时 / 通知 / 悬浮窗权限：
+        厂商自启动 / 关联启动 / 后台活动设置：
+        定时触发时供电 / 亮屏 / 锁定状态：
+        分辨率 / 横竖屏 / 显示缩放：
+        LayoutPath：默认 / 自定义 / 未使用 / 未知；布局是否核对：
+        AcceptUnverifiedLayout：是否显式启用；兼容诊断的脱敏错误码：
+    validations:
+      required: true
+  - type: textarea
+    id: observed_stages
+    attributes:
+      label: 已实测阶段与独立官方结果
+      description: 各阶段请填写通过 / 失败 / 未测试 / 未知。官方考勤页须单独核对，启动日志不等于有效打卡。
+      placeholder: |
+        系统任务到点：
+        解锁或恢复启动请求（如使用）：
+        钉钉进入前台：
+        考勤页读取与回传（如使用）：
+        官方签到记录：
+        官方签退记录：
+        隔夜 / 连续多日 / 重启恢复：测试时长与结果，或未测试
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized_evidence
+    attributes:
+      label: 脱敏事件与补充说明（可选）
+      description: 仅贴相关诊断状态、版本和脱敏事件；不要上传原始截图、完整界面文本、serial 或凭据。
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我了解项目仍为预发布单机试用，未测试环境不会因此标为支持。
+          required: true
+        - label: 我已移除 PIN、密钥、姓名、位置、设备 serial 和原始考勤截图。
+          required: true

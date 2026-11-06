@@ -4,6 +4,8 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [string]$AdbPath,
     [string]$UiDumpJarPath,
+    [string]$LayoutPath,
+    [switch]$AcceptUnverifiedLayout,
     [switch]$Once,
     [switch]$NavigateToAttendance
 )
@@ -12,6 +14,10 @@ Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'AppBridge.psm1') -Force
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Run the attendance reader on Windows.' }
 Import-Module (Join-Path $PSScriptRoot 'AttendanceScreen.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'AttendanceLayout.psm1') -Force
+if (!$LayoutPath) { $LayoutPath = Join-Path $PSScriptRoot '..\layouts\huawei-attendance-portrait-v1.json' }
+$LayoutPath = [IO.Path]::GetFullPath($LayoutPath)
+$layout = Get-AttendanceLayout -LayoutPath $LayoutPath
 if (!$AdbPath) {
     $command = Get-Command adb -ErrorAction SilentlyContinue
     if ($command) { $AdbPath = $command.Source }
@@ -110,6 +116,7 @@ try {
             capturedAt = [datetimeoffset]::Now.ToString('o'); connected = $false; locked = $null
             attendancePageConfirmed = $false; outcome = 'waiting-for-attendance-page'
             observation = $null; confirmations = @(); appStateAvailable = $false
+            layout = $layout.Id; requiresDeviceAcceptance = $null
         }
         try {
             if ((Read-Adb @('get-state')).Trim() -cne 'device') { throw 'Phone is not connected.' }
@@ -140,12 +147,28 @@ try {
                         $shortcutXml = $null; $shortcutDoc = $null; $shortcuts = $null
                     }
                 }
-                $dingForeground = $windows -cmatch '(?m)^\s*mCurrentFocus=.*com\.alibaba\.android\.rimet/[^\r\n]*TheOneActivity'
+                # Activity names vary across DingTalk versions. Semantic page
+                # tabs below still have to match before any OCR is accepted.
+                $dingForeground = $windows -cmatch '(?m)^\s*mCurrentFocus=.*com\.alibaba\.android\.rimet/'
                 if ($dingForeground) {
                     $stage = 'unsupported-device-layout'
                     $size = Read-Adb @('shell', 'wm', 'size')
                     $sizes = [regex]::Matches($size, '(?:Physical|Override) size:\s*([0-9]+)x([0-9]+)')
-                    if (!$sizes.Count -or $sizes[$sizes.Count - 1].Groups[1].Value -cne '1080' -or $sizes[$sizes.Count - 1].Groups[2].Value -cne '2400') { throw 'Unsupported screen dimensions.' }
+                    if (!$sizes.Count) { throw 'Screen dimensions were not available.' }
+                    $screenWidth = [int]$sizes[$sizes.Count - 1].Groups[1].Value
+                    $screenHeight = [int]$sizes[$sizes.Count - 1].Groups[2].Value
+                    $resolvedLayout = Resolve-AttendanceLayout -Layout $layout -ImageWidth $screenWidth -ImageHeight $screenHeight
+                    $stage = 'device-profile-read-failed'
+                    $model = (Read-Adb @('shell', 'getprop', 'ro.product.model')).Trim()
+                    $apiLevel = (Read-Adb @('shell', 'getprop', 'ro.build.version.sdk')).Trim()
+                    $packageInfo = Read-Adb @('shell', 'dumpsys', 'package', 'com.alibaba.android.rimet')
+                    $referenceDevice = $model -ceq 'JEF-AN00' -and $apiLevel -ceq '31' -and
+                        $packageInfo -cmatch '(?m)^\s*versionName=9\.0\.5\s*$'
+                    $status.requiresDeviceAcceptance = $resolvedLayout.RequiresDeviceAcceptance -or !$referenceDevice
+                    if ($status.requiresDeviceAcceptance -and !$AcceptUnverifiedLayout) {
+                        $stage = 'layout-acceptance-required'
+                        throw 'Validate this device and profile before allowing automatic confirmations.'
+                    }
                     $stage = 'attendance-page-read-failed'
                     if (!$helperPushed) { [void](Read-Adb @('push', $UiDumpJarPath, '/data/local/tmp/autoding-ui.jar')); $helperPushed = $true }
                     $xml = Read-Adb @('shell', 'CLASSPATH=/data/local/tmp/autoding-ui.jar app_process /system/bin xcom.warof.chosen.tools.ReadWindow')
@@ -159,10 +182,23 @@ try {
                         [void](Read-Adb @('shell', 'screencap', '-p', $deviceImage))
                         [void](Read-Adb @('pull', $deviceImage, $imagePath))
                         $stage = 'attendance-ocr-failed'
-                        $ocrText = Invoke-TextProcess $windowsPowerShell @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ocrScript, '-ImagePath', $imagePath) 30000
+                        $ocrText = Invoke-TextProcess $windowsPowerShell @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ocrScript, '-ImagePath', $imagePath, '-LayoutPath', $LayoutPath) 30000
                         $ocr = $ocrText | ConvertFrom-Json -Depth 8
                         $ocrText = $null
-                        if ($ocr.OCRAvailable -ne $true -or $ocr.Layout -cne 'HuaweiAttendancePortraitV1' -or $ocr.ImageWidth -ne 1080 -or $ocr.ImageHeight -ne 2400) { throw 'OCR observation was not available in the supported layout.' }
+                        if ($ocr.OCRAvailable -ne $true -or $ocr.Layout -cne $layout.Id -or
+                            $ocr.ImageWidth -ne $screenWidth -or $ocr.ImageHeight -ne $screenHeight) {
+                            throw 'OCR observation did not match the selected profile and dimensions.'
+                        }
+                        if ($ocr.RequiresDeviceAcceptance -isnot [bool] -or $ocr.IsScaled -isnot [bool]) {
+                            throw 'OCR profile acceptance metadata was not available.'
+                        }
+                        # OCR reloads the file in a separate process. A profile
+                        # edited during this run must not inherit cached approval.
+                        $status.requiresDeviceAcceptance = $status.requiresDeviceAcceptance -or $ocr.RequiresDeviceAcceptance
+                        if ($status.requiresDeviceAcceptance -and !$AcceptUnverifiedLayout) {
+                            $stage = 'layout-acceptance-required'
+                            throw 'The current OCR profile requires device acceptance.'
+                        }
                         $stage = 'phone-clock-read-failed'
                         $epochText = (Read-Adb @('shell', 'date', '+%s')).Trim()
                         if ($epochText -notmatch '^[0-9]{10,12}$') { throw 'Phone epoch was not recognized.' }
@@ -207,7 +243,7 @@ try {
             $ocr = $null; $ocrText = $null; $xml = $null
         }
         Write-Status $status
-        $event = [ordered]@{ connected = $status.connected; locked = $status.locked; attendancePageConfirmed = $status.attendancePageConfirmed; outcome = $status.outcome; observation = $status.observation; confirmations = $status.confirmations; appStateAvailable = $status.appStateAvailable }
+        $event = [ordered]@{ connected = $status.connected; locked = $status.locked; attendancePageConfirmed = $status.attendancePageConfirmed; outcome = $status.outcome; observation = $status.observation; confirmations = $status.confirmations; appStateAvailable = $status.appStateAvailable; layout = $status.layout; requiresDeviceAcceptance = $status.requiresDeviceAcceptance }
         $eventJson = ConvertTo-Json -InputObject $event -Depth 8 -Compress
         if ($eventJson -cne $lastEvent) {
             $record = [ordered]@{ capturedAt = $status.capturedAt; result = $event }

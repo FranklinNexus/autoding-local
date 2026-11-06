@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="xcom.warof.chosen" android:versionCode="9" android:versionName="0.9-local">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="xcom.warof.chosen" android:versionCode="10" android:versionName="0.10-preview">
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="33" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />

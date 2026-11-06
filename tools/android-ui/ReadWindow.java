@@ -6,6 +6,7 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.graphics.Rect;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.Xml;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -22,7 +23,14 @@ public final class ReadWindow {
             Object connection = Class.forName("android.app.UiAutomationConnection").getConstructor().newInstance();
             automation = (UiAutomation)UiAutomation.class.getConstructor(Looper.class, connectionType)
                 .newInstance(thread.getLooper(), connection);
-            UiAutomation.class.getMethod("connect", int.class).invoke(automation, 1);
+            if (Build.VERSION.SDK_INT >= 24) {
+                UiAutomation.class.getMethod("connect", int.class).invoke(automation, 1);
+            } else {
+                // Android 6 exposes only connect(). Unlike FLAG_DONT_SUPPRESS
+                // on newer releases, it temporarily suppresses accessibility
+                // services until this short snapshot disconnects.
+                UiAutomation.class.getMethod("connect").invoke(automation);
+            }
             AccessibilityServiceInfo info = automation.getServiceInfo();
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
             automation.setServiceInfo(info);

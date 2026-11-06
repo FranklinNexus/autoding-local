@@ -1,0 +1,51 @@
+name: Build preview artifacts
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preview:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android build dependencies
+        shell: pwsh
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          if ($LASTEXITCODE -ne 0) { throw 'Android SDK dependency installation failed.' }
+      - name: Build APK with a fresh test key
+        shell: pwsh
+        run: ./build.ps1
+      - name: Build UI helper
+        shell: pwsh
+        run: ./tools/Build-UiDump.ps1
+      - name: Package clean-source preview
+        shell: pwsh
+        run: ./tools/Package-Preview.ps1
+      - name: Explain test signing
+        shell: pwsh
+        run: |
+          @'
+          Preview artifacts use a test key generated during this CI run.
+          APKs from different CI runs do not share an upgrade signature.
+          A maintainer retaining the local key can build a stable-signature
+          preview and publish a GitHub release manually after review.
+          No signing key is included in the artifacts.
+          '@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoDing-preview
+          path: |
+            build/distribution/AutoDing-local-test.apk
+            build/distribution/AutoDing-windows-tools.zip
+            build/distribution/SHA256SUMS.txt
+            build/distribution/metadata.json
+          if-no-files-found: error
+          retention-days: 14

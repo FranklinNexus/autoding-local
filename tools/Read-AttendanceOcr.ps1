@@ -1,7 +1,8 @@
 #requires -Version 5.1
 param(
     [Parameter(Mandatory = $true)][string]$ImagePath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$LayoutPath
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -9,14 +10,16 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8
 $OutputEncoding = $utf8
 
-# This adapter supports only the known Huawei portrait attendance layout.
-# Coordinates are scaled from 1080 x 2400; never run OCR on the full image.
+# Profiles select only the card and date regions. The default retains the
+# tested Huawei reference; other dimensions or profiles need device acceptance.
 $result = [ordered]@{
     OCRAvailable = $false
     failureReason = $null
-    Layout = 'HuaweiAttendancePortraitV1'
+    Layout = $null
     ImageWidth = $null
     ImageHeight = $null
+    IsScaled = $null
+    RequiresDeviceAcceptance = $true
     EngineLanguage = $null
     MorningLines = @()
     EveningLines = @()
@@ -36,11 +39,8 @@ function Wait-WinRt {
 }
 
 function Read-CropLines {
-    param([Drawing.Bitmap]$Image, [int[]]$ReferenceBounds, [object]$Engine)
-    $left = [int][Math]::Floor($ReferenceBounds[0] * $Image.Width / 1080.0)
-    $top = [int][Math]::Floor($ReferenceBounds[1] * $Image.Height / 2400.0)
-    $right = [int][Math]::Ceiling($ReferenceBounds[2] * $Image.Width / 1080.0)
-    $bottom = [int][Math]::Ceiling($ReferenceBounds[3] * $Image.Height / 2400.0)
+    param([Drawing.Bitmap]$Image, [int[]]$Bounds, [object]$Engine)
+    $left, $top, $right, $bottom = $Bounds
     $rectangle = [Drawing.Rectangle]::new($left, $top, $right - $left, $bottom - $top)
     $crop = $null
     $memory = $null
@@ -76,6 +76,11 @@ try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw 'Windows is required.'
     }
+    $failureStage = 'invalid-layout-configuration'
+    Import-Module (Join-Path $PSScriptRoot 'AttendanceLayout.psm1') -Force
+    $layout = Get-AttendanceLayout -LayoutPath $LayoutPath
+    $result.Layout = $layout.Id
+    $failureStage = 'windows-ocr-unavailable'
     Add-Type -AssemblyName System.Drawing
     Add-Type -AssemblyName System.Runtime.WindowsRuntime
     [void][Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
@@ -105,17 +110,14 @@ try {
     $result.ImageWidth = $sourceImage.Width
     $result.ImageHeight = $sourceImage.Height
     $failureStage = 'unsupported-layout-dimensions'
-    if ($sourceImage.Width -le 0 -or $sourceImage.Height -le 0 -or
-        [Math]::Abs(($sourceImage.Width / [double]$sourceImage.Height) - (1080.0 / 2400.0)) -gt 0.005) {
-        throw 'Only the known Huawei portrait aspect ratio is supported.'
-    }
+    $resolved = Resolve-AttendanceLayout -Layout $layout -ImageWidth $sourceImage.Width -ImageHeight $sourceImage.Height -MaxCropDimension ([Windows.Media.Ocr.OcrEngine]::MaxImageDimension)
+    $result.IsScaled = $resolved.IsScaled
+    $result.RequiresDeviceAcceptance = $resolved.RequiresDeviceAcceptance
 
     $failureStage = 'attendance-crop-ocr-failed'
-    # Keep the first glyph of both card headings. Narrow the right-hand card
-    # before its adjacent "update punch" action contaminates the receipt line.
-    $result.MorningLines = @(Read-CropLines $sourceImage @(44, 590, 518, 730) $engine)
-    $result.EveningLines = @(Read-CropLines $sourceImage @(506, 590, 806, 730) $engine)
-    $result.DateLines = @(Read-CropLines $sourceImage @(310, 1320, 780, 1605) $engine)
+    $result.MorningLines = @(Read-CropLines $sourceImage $resolved.Crops.Morning $engine)
+    $result.EveningLines = @(Read-CropLines $sourceImage $resolved.Crops.Evening $engine)
+    $result.DateLines = @(Read-CropLines $sourceImage $resolved.Crops.Date $engine)
     $result.OCRAvailable = $true
 } catch {
     # Return a stable reason, never exception text containing a path or UI text.

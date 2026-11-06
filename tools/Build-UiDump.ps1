@@ -8,6 +8,12 @@ if (!$SdkPath) {
         else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
 }
 $target = Join-Path (Split-Path $PSScriptRoot) 'build\ui-dump'
+foreach ($name in @('classes', 'dex')) {
+    $generated = [IO.Path]::GetFullPath((Join-Path $target $name))
+    $expected = [IO.Path]::GetFullPath($target) + [IO.Path]::DirectorySeparatorChar
+    if (!$generated.StartsWith($expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected UI build output path.' }
+    if (Test-Path -LiteralPath $generated) { Remove-Item -LiteralPath $generated -Recurse -Force }
+}
 New-Item -ItemType Directory -Path $target,(Join-Path $target 'classes'),(Join-Path $target 'dex') -Force | Out-Null
 $androidJar = Join-Path $SdkPath 'platforms\android-35\android.jar'
 $toolsDirectory = Join-Path $SdkPath 'build-tools\35.0.0'

@@ -1,0 +1,121 @@
+name: 问题反馈
+description: 提供可复现步骤、运行环境及脱敏诊断事件。
+title: "[问题] 简要描述现象"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请勿填写 PIN、密钥、凭据文件、姓名、位置、设备 serial，也不要上传原始考勤截图或完整界面文本。
+        日志请只保留相关脱敏事件。LayoutPath 仅描述配置方式和匹配情况，无需上传个人路径。
+        未知或未使用的环境项可明确填写未知或未使用；请分别描述任务触发、钉钉启动和官方考勤结果。
+  - type: input
+    id: app_version
+    attributes:
+      label: AutoDing 版本或提交
+      placeholder: "例如：0.10.0-preview.1 / 提交号；未知可填未知"
+    validations:
+      required: true
+  - type: textarea
+    id: device_environment
+    attributes:
+      label: 手机与钉钉环境
+      description: 填型号和版本即可，不需要任何设备标识或账号。
+      placeholder: |
+        手机厂商 / 型号：
+        Android 版本 / API：
+        厂商系统版本：
+        钉钉版本：
+    validations:
+      required: true
+  - type: textarea
+    id: windows_environment
+    attributes:
+      label: Windows / PowerShell / OCR 环境
+      description: 分别填写版本及 OCR 识别语言；未使用或未知可直接注明。
+      placeholder: |
+        Windows：
+        PowerShell：
+        OCR 组件版本 / 语言：
+    validations:
+      required: true
+  - type: dropdown
+    id: modes
+    attributes:
+      label: 发生问题时运行的模式
+      multiple: true
+      options:
+        - Android-only（手机单独运行）
+        - Windows Observe（状态与日志采集）
+        - Windows Unlock（USB 辅助解锁）
+        - Windows Attendance（考勤页读取）
+        - 未测试 / 未知
+    validations:
+      required: true
+  - type: textarea
+    id: runtime_conditions
+    attributes:
+      label: 连接、权限、锁屏与布局状态
+      description: 逐项填写事实或未知。PIN 仅说明是否为标准系统控件，勿填写具体数字；LayoutPath 仅填默认 / 自定义及是否匹配。
+      placeholder: |
+        ADB 是否可连接（device / unauthorized / offline / 未使用 / 未知）：
+        标准系统 PIN 控件是否识别：
+        精确定时 / 通知 / 悬浮窗权限：
+        厂商自启动 / 关联启动 / 后台活动限制：
+        问题发生时供电 / 亮屏 / 锁定状态：
+        分辨率 / 横竖屏 / 显示缩放：
+        LayoutPath 配置与匹配情况：
+        AcceptUnverifiedLayout：是否显式启用；兼容诊断的脱敏错误码：
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 描述从哪个状态开始、做了哪些操作、在哪一步出现问题，以及是否稳定复现。
+      placeholder: |
+        1. 初始状态与相关设置：
+        2. 执行操作或等待任务：
+        3. 观察到的问题：
+        复现频率：
+    validations:
+      required: true
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: 期望行为与实际行为
+      placeholder: |
+        期望行为：
+        实际行为：
+    validations:
+      required: true
+  - type: textarea
+    id: official_result
+    attributes:
+      label: 实测阶段与独立官方考勤结果
+      description: 各项填通过 / 失败 / 未测试 / 未知。仅打开 App、预计签退时间或启动日志不算实际考勤记录。
+      placeholder: |
+        系统任务触发：
+        解锁 / 恢复请求（如使用）：
+        钉钉进入前台：
+        考勤读取 / 回传（如使用）：
+        独立查看官方签到记录：
+        独立查看官方签退记录：
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized_events
+    attributes:
+      label: 相关脱敏事件
+      description: 贴相关时间段的诊断事件与状态即可。若没有日志，填未采集；请勿上传原始截图、PIN、serial、姓名或位置。
+      placeholder: "例如：系统闹钟触发 → 锁定状态 → 页面启动确认 → 考勤待核实；或未采集"
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我了解项目仍为预发布单机试用，未测试环境尚无兼容性结论。
+          required: true
+        - label: 我已移除 PIN、密钥、姓名、位置、设备 serial 和原始考勤截图。
+          required: true

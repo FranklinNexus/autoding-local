@@ -26,6 +26,21 @@ jobs:
       - name: Check attendance observation parsing
         shell: pwsh
         run: ./test/Test-AttendanceScreen.ps1
+      - name: Check attendance page recognition
+        shell: pwsh
+        run: ./test/Test-AttendanceWatcher.ps1
+      - name: Check device layouts and calibration on PowerShell 7
+        shell: pwsh
+        run: ./test/Test-AttendanceLayout.ps1
+      - name: Check OCR layout compatibility with Windows PowerShell 5.1
+        shell: powershell
+        run: ./test/Test-AttendanceLayout.ps1
+      - name: Check compatibility doctor and task parameter forwarding
+        shell: pwsh
+        run: ./test/Test-DeviceCompatibility.ps1
+      - name: Check Android 6 and newer UI helper behavior
+        shell: pwsh
+        run: ./test/Test-AndroidUi.ps1
       - name: Check bounded unlock recovery
         shell: pwsh
         run: ./test/Test-UnlockRecovery.ps1
@@ -35,3 +50,26 @@ jobs:
       - name: Rehearse complete shift without device or attendance writes
         shell: pwsh
         run: ./test/Test-FullDryRun.ps1
+  android-build:
+    needs: planner
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK components
+        shell: pwsh
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          if ($LASTEXITCODE -ne 0) { throw 'Android SDK installation failed.' }
+      - name: Compile and verify Android binaries
+        shell: pwsh
+        run: |
+          ./build.ps1
+          ./tools/Build-UiDump.ps1
+          ./tools/Package-Preview.ps1

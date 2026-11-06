@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "HuaweiAttendancePortraitV1",
+  "referenceWidth": 1080,
+  "referenceHeight": 2400,
+  "aspectTolerance": 0.005,
+  "crops": {
+    "morning": [44, 590, 518, 730],
+    "evening": [506, 590, 806, 730],
+    "date": [310, 1320, 780, 1605]
+  }
+}
