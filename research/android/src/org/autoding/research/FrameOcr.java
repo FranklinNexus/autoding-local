@@ -1,0 +1,402 @@
+package org.autoding.research;
+
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.os.Handler;
+import android.os.Looper;
+import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.Text;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.TextRecognizer;
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import org.json.JSONObject;
+
+/** Offline receipt reader. Ownership of the input bitmap transfers to this call. */
+public final class FrameOcr {
+    private FrameOcr() {}
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final int[][] CROPS = {{44,590,518,730},{506,590,840,730},{310,1320,780,1605}};
+    // Reference-layout icon pixels only. Receipt text begins at x173/x618.
+    private static final int[][] ICON_MASKS = {{44,675,166,730},{506,675,612,730}};
+    // Isolate context labels. The button model gets the observed full sheet,
+    // then only real OCR boxes inside EARLY_BUTTON_BAND enter the parser.
+    private static final int[][] EARLY_CROPS = {{40,1790,400,1980},{40,1985,400,2100},
+        {40,2090,420,2160},{0,1750,1080,2400}};
+    private static final int[] EARLY_BUTTON_BAND = {40,2220,1040,2360};
+    private static final long MAX_FRAME_AGE_MS = 60000;
+
+    public interface Callback { void onResult(Result result); }
+    public interface EarlyCheckoutCallback { void onResult(EarlyCheckoutResult result); }
+    public interface SuccessCallback { void onResult(CheckoutSuccessResult result); }
+
+    public static final class CheckoutSuccessResult {
+        public final boolean accepted;
+        public final String reason,date,checkOut;
+        public final Rect actionBounds;
+        public final long freshTimeMs;
+        public final JSONObject diagnostics;
+        private CheckoutSuccessResult(boolean accepted,String reason,String date,String checkOut,Rect actionBounds,long freshTimeMs,JSONObject diagnostics) {
+            this.accepted=accepted; this.reason=reason; this.date=accepted ? date : null; this.checkOut=accepted ? checkOut : null;
+            this.actionBounds=actionBounds == null ? null : new Rect(actionBounds); this.freshTimeMs=freshTimeMs; this.diagnostics=diagnostics;
+        }
+    }
+
+    public static final class EarlyCheckoutResult {
+        public final boolean accepted;
+        public final String reason,label;
+        public final Rect bounds;
+        public final long freshTimeMs;
+        public final JSONObject diagnostics;
+        private EarlyCheckoutResult(boolean accepted,String reason,Rect bounds,long freshTimeMs,JSONObject diagnostics) {
+            this.accepted=accepted; this.reason=reason; this.label=accepted ? "早退打卡" : null;
+            this.bounds=bounds == null ? null : new Rect(bounds); this.freshTimeMs=freshTimeMs;
+            this.diagnostics=diagnostics;
+        }
+    }
+
+    public static final class Result {
+        public final boolean accepted;
+        public final String reason, date, checkIn, checkOut;
+        public final String actionLabel;
+        public final Rect actionBounds;
+        public final JSONObject diagnostics;
+        public final long freshTimeMs;
+        private Result(boolean accepted, String reason, String date, String checkIn, String checkOut, long freshTimeMs,
+                       String actionLabel, Rect actionBounds, JSONObject diagnostics) {
+            this.accepted=accepted; this.reason=reason; this.date=date;
+            this.checkIn=checkIn; this.checkOut=checkOut; this.freshTimeMs=freshTimeMs;
+            this.actionLabel=actionLabel; this.actionBounds=actionBounds == null ? null : new Rect(actionBounds);
+            this.diagnostics=diagnostics;
+        }
+    }
+
+    /**
+     * Reads the three established Huawei portrait regions, never the full page.
+     * freshTimeMs is the wall-clock epoch time at screenshot capture, not uptime.
+     * Exactly one main-thread callback is delivered. Raw text/images are not stored.
+     */
+    public static void recognize(Bitmap bitmap, long freshTimeMs, Callback callback) {
+        if (callback == null) { release(bitmap); throw new IllegalArgumentException("callback-required"); }
+        if (bitmap == null || bitmap.isRecycled()) {
+            fail(bitmap,freshTimeMs,"frame-missing",callback); return;
+        }
+        long age=System.currentTimeMillis()-freshTimeMs;
+        if (freshTimeMs <= 0 || age < -2000 || age > MAX_FRAME_AGE_MS) {
+            fail(bitmap,freshTimeMs,"frame-not-fresh",callback); return;
+        }
+        int width=bitmap.getWidth(), height=bitmap.getHeight();
+        if (width < 540 || height < 1200 || width > 5000 || height > 5000 ||
+            Math.abs(width/(double)height-1080.0/2400.0) > 0.005) {
+            fail(bitmap,freshTimeMs,"unsupported-layout",callback); return;
+        }
+        final ZonedDateTime frameTime;
+        try { frameTime=Instant.ofEpochMilli(freshTimeMs).atZone(ZoneId.systemDefault()); }
+        catch (RuntimeException exception) { fail(bitmap,freshTimeMs,"frame-time-invalid",callback); return; }
+
+        List<Bitmap> crops=new ArrayList<>();
+        List<Task<Text>> tasks=new ArrayList<>();
+        final TextRecognizer recognizer;
+        try { recognizer=TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build()); }
+        catch (RuntimeException exception) { fail(bitmap,freshTimeMs,"ocr-model-unavailable",callback); return; }
+        String setupReason=null;
+        try {
+            for (int index=0;index<CROPS.length;index++) {
+                int[] box=CROPS[index];
+                int left=(int)Math.floor(box[0]*width/1080.0), top=(int)Math.floor(box[1]*height/2400.0);
+                int right=(int)Math.ceil(box[2]*width/1080.0), bottom=(int)Math.ceil(box[3]*height/2400.0);
+                Bitmap crop=Bitmap.createBitmap(bitmap,left,top,right-left,bottom-top);
+                if (index < ICON_MASKS.length) {
+                    Bitmap originalCrop=crop;
+                    try { crop=originalCrop.copy(Bitmap.Config.ARGB_8888,true); }
+                    finally { if (originalCrop != bitmap) release(originalCrop); }
+                    if (crop == null) throw new IllegalStateException("mutable-crop-unavailable");
+                }
+                crops.add(crop);
+                if (index < ICON_MASKS.length) {
+                    int[] icon=ICON_MASKS[index];
+                    Paint fill=new Paint(); fill.setColor(Color.rgb(245,245,245));
+                    new Canvas(crop).drawRect(
+                        (int)Math.floor(icon[0]*width/1080.0)-left,
+                        (int)Math.floor(icon[1]*height/2400.0)-top,
+                        (int)Math.ceil(icon[2]*width/1080.0)-left,
+                        (int)Math.ceil(icon[3]*height/2400.0)-top,fill);
+                }
+                tasks.add(recognizer.process(InputImage.fromBitmap(crop,0)));
+            }
+        } catch (RuntimeException exception) { setupReason="ocr-setup-failed"; }
+        final String failure=setupReason;
+        // Even partial setup may have issued native readers. Recycle only once
+        // every issued task completes, then close the per-frame recognizer.
+        Tasks.whenAllComplete(tasks).addOnCompleteListener(done -> {
+            Result result;
+            try {
+                boolean success=failure == null && tasks.size() == 3;
+                for (Task<Text> task:tasks) success &= task.isSuccessful();
+                if (!success) result=rejected(freshTimeMs,failure == null ? "offline-ocr-failed" : failure);
+                else {
+                    String morning=tasks.get(0).getResult().getText(), evening=tasks.get(1).getResult().getText(),
+                        dateText=tasks.get(2).getResult().getText();
+                    JSONObject diagnostics=new JSONObject(ReceiptParser.diagnostics(morning,evening,dateText));
+                    ReceiptParser.Result parsed=ReceiptParser.parse(morning,evening,dateText,frameTime);
+                    String label=null; Rect bounds=null; int hits=0;
+                    int dx=(int)Math.floor(CROPS[2][0]*width/1080.0), dy=(int)Math.floor(CROPS[2][1]*height/2400.0);
+                    for (Text.TextBlock block:tasks.get(2).getResult().getTextBlocks()) {
+                        for (Text.Line line:block.getLines()) {
+                            String value=line.getText().replaceAll("\\s+", "");
+                            if (!value.equals("下班打卡") && !value.equals("更新打卡")) continue;
+                            hits++; label=value;
+                            Rect box=line.getBoundingBox();
+                            bounds=box == null || box.isEmpty() ? null : new Rect(box);
+                            if (bounds != null) bounds.offset(dx,dy);
+                        }
+                    }
+                    if (hits != 1 || !parsed.accepted) { label=null; bounds=null; }
+                    result=new Result(parsed.accepted,parsed.reason,parsed.date,parsed.checkIn,parsed.checkOut,
+                        freshTimeMs,label,bounds,diagnostics);
+                }
+            } catch (RuntimeException exception) { result=rejected(freshTimeMs,"ocr-result-unconfirmed"); }
+            finally {
+                for (Bitmap crop:crops) release(crop);
+                release(bitmap);
+                recognizer.close();
+            }
+            deliver(callback,result);
+        });
+    }
+
+    /** Reads only the observed bottom sheet. It never enters a reason or clicks. */
+    public static void recognizeEarlyCheckout(Bitmap bitmap,long freshTimeMs,EarlyCheckoutCallback callback) {
+        if (callback == null) { release(bitmap); throw new IllegalArgumentException("callback-required"); }
+        if (bitmap == null || bitmap.isRecycled()) {
+            release(bitmap); deliverEarly(callback,earlyRejected(freshTimeMs,"frame-missing")); return;
+        }
+        long age=System.currentTimeMillis()-freshTimeMs;
+        if (freshTimeMs <= 0 || age < -2000 || age > MAX_FRAME_AGE_MS) {
+            release(bitmap); deliverEarly(callback,earlyRejected(freshTimeMs,"frame-not-fresh")); return;
+        }
+        int width=bitmap.getWidth(),height=bitmap.getHeight();
+        if (width < 540 || height < 1200 || width > 5000 || height > 5000 ||
+            Math.abs(width/(double)height-1080.0/2400.0) > 0.005) {
+            release(bitmap); deliverEarly(callback,earlyRejected(freshTimeMs,"unsupported-layout")); return;
+        }
+        final TextRecognizer recognizer;
+        try { recognizer=TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build()); }
+        catch (RuntimeException exception) {
+            release(bitmap); deliverEarly(callback,earlyRejected(freshTimeMs,"ocr-model-unavailable")); return;
+        }
+        List<Bitmap> crops=new ArrayList<>();
+        List<Rect> regions=new ArrayList<>();
+        List<Task<Text>> tasks=new ArrayList<>();
+        String setupReason=null;
+        try {
+            for (int i=0;i<EARLY_CROPS.length;i++) {
+                int[] source=EARLY_CROPS[i];
+                Rect region=new Rect((int)Math.floor(source[0]*width/1080.0),(int)Math.floor(source[1]*height/2400.0),
+                    (int)Math.ceil(source[2]*width/1080.0),(int)Math.ceil(source[3]*height/2400.0));
+                Bitmap crop=Bitmap.createBitmap(bitmap,region.left,region.top,region.width(),region.height());
+                if (i == 2) {
+                    Bitmap original=crop;
+                    try { crop=original.copy(Bitmap.Config.ARGB_8888,true); }
+                    finally { if (original != bitmap) release(original); }
+                    if (crop == null) throw new IllegalStateException("mutable-crop-unavailable");
+                }
+                crops.add(crop); regions.add(region);
+                if (i == 2) enhancePlaceholderContrast(crop);
+                tasks.add(recognizer.process(InputImage.fromBitmap(crop,0)));
+            }
+        } catch (RuntimeException exception) { setupReason="ocr-setup-failed"; }
+        final String failure=setupReason;
+        Tasks.whenAllComplete(tasks).addOnCompleteListener(done -> {
+            EarlyCheckoutResult result;
+            try {
+                boolean success=failure == null && tasks.size() == 4;
+                for (Task<Text> task:tasks) success &= task.isSuccessful();
+                if (!success) result=earlyRejected(freshTimeMs,failure == null ? "offline-ocr-failed" : failure);
+                else {
+                    List<List<String>> bandTexts=new ArrayList<>();
+                    List<List<Text.Line>> bandLines=new ArrayList<>();
+                    int buttonContextLines=0;
+                    Rect buttonBand=new Rect((int)Math.floor(EARLY_BUTTON_BAND[0]*width/1080.0),
+                        (int)Math.floor(EARLY_BUTTON_BAND[1]*height/2400.0),
+                        (int)Math.ceil(EARLY_BUTTON_BAND[2]*width/1080.0),
+                        (int)Math.ceil(EARLY_BUTTON_BAND[3]*height/2400.0));
+                    for (int i=0;i<tasks.size();i++) {
+                        List<Text.Line> observed=new ArrayList<>();
+                        for (Text.TextBlock block:tasks.get(i).getResult().getTextBlocks()) {
+                            for (Text.Line line:block.getLines()) {
+                                if (i == 3) {
+                                    buttonContextLines++;
+                                    Rect box=line.getBoundingBox();
+                                    if (box == null || box.isEmpty()) continue;
+                                    Rect screenBox=new Rect(box);
+                                    screenBox.offset(regions.get(i).left,regions.get(i).top);
+                                    if (!buttonBand.contains(screenBox)) continue;
+                                }
+                                observed.add(line);
+                            }
+                        }
+                        List<String> texts=new ArrayList<>();
+                        for (Text.Line line:observed) texts.add(line.getText());
+                        bandTexts.add(texts); bandLines.add(observed);
+                    }
+                    EarlyCheckoutParser.Result parsed=EarlyCheckoutParser.parseBands(bandTexts);
+                    JSONObject diagnostics=new JSONObject(parsed.diagnostics);
+                    diagnostics.put("buttonContextLineCount",buttonContextLines);
+                    diagnostics.put("buttonBandLineCount",bandLines.get(3).size());
+                    Rect button=null; String reason=parsed.reason;
+                    int validBounds=0, requiredBounds=0;
+                    for (int i=0;i<bandLines.size();i++) {
+                        Rect region=regions.get(i); boolean valid=!bandLines.get(i).isEmpty();
+                        for (Text.Line line:bandLines.get(i)) {
+                            Rect box=line.getBoundingBox();
+                            valid &= box != null && !box.isEmpty() && box.left >= 0 && box.top >= 0 &&
+                                box.right <= region.width() && box.bottom <= region.height();
+                        }
+                        if (valid) { validBounds++; if (i != 2) requiredBounds++; }
+                    }
+                    diagnostics.put("observedBandMatches",validBounds);
+                    diagnostics.put("requiredBandBoundsMatches",requiredBounds);
+                    if (parsed.accepted) {
+                        if (requiredBounds != 3) reason="early-sheet-bounds-unconfirmed";
+                        else {
+                            // parseBands requires one exact button line. Keep its
+                            // actual OCR box; the other regions only prove context.
+                            button=new Rect(bandLines.get(3).get(0).getBoundingBox());
+                            button.offset(regions.get(3).left,regions.get(3).top);
+                        }
+                    }
+                    result=new EarlyCheckoutResult(reason.isEmpty(),reason,reason.isEmpty() ? button : null,freshTimeMs,diagnostics);
+                }
+            } catch (RuntimeException exception) { result=earlyRejected(freshTimeMs,"early-sheet-result-unconfirmed"); }
+            catch (org.json.JSONException exception) { result=earlyRejected(freshTimeMs,"early-sheet-result-unconfirmed"); }
+            finally { for (Bitmap crop:crops) release(crop); release(bitmap); recognizer.close(); }
+            deliverEarly(callback,result);
+        });
+    }
+
+    /** Reads only the observed success modal; never clicks its result action. */
+    public static void recognizeCheckoutSuccess(Bitmap bitmap,long freshTimeMs,SuccessCallback callback) {
+        if (callback == null) { release(bitmap); throw new IllegalArgumentException("callback-required"); }
+        if (bitmap == null || bitmap.isRecycled()) {
+            release(bitmap); deliverSuccess(callback,successRejected(freshTimeMs,"frame-missing")); return;
+        }
+        long age=System.currentTimeMillis()-freshTimeMs;
+        if (freshTimeMs <= 0 || age < -2000 || age > MAX_FRAME_AGE_MS) {
+            release(bitmap); deliverSuccess(callback,successRejected(freshTimeMs,"frame-not-fresh")); return;
+        }
+        int width=bitmap.getWidth(),height=bitmap.getHeight();
+        if (width < 540 || height < 1200 || width > 5000 || height > 5000 ||
+            Math.abs(width/(double)height-1080.0/2400.0) > 0.005) {
+            release(bitmap); deliverSuccess(callback,successRejected(freshTimeMs,"unsupported-layout")); return;
+        }
+        final TextRecognizer recognizer;
+        try { recognizer=TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build()); }
+        catch (RuntimeException exception) {
+            release(bitmap); deliverSuccess(callback,successRejected(freshTimeMs,"ocr-model-unavailable")); return;
+        }
+        Rect region=new Rect((int)Math.floor(115*width/1080.0),(int)Math.floor(1750*height/2400.0),
+            (int)Math.ceil(967*width/1080.0),(int)Math.ceil(2140*height/2400.0));
+        Bitmap crop=null;
+        try {
+            crop=Bitmap.createBitmap(bitmap,region.left,region.top,region.width(),region.height());
+            Bitmap original=crop;
+            try { crop=original.copy(Bitmap.Config.ARGB_8888,true); }
+            finally { if (original != bitmap) release(original); }
+            if (crop == null) throw new IllegalStateException("mutable-crop-unavailable");
+            Paint iconFill=new Paint(); iconFill.setColor(Color.WHITE);
+            new Canvas(crop).drawRect(
+                (int)Math.floor(350*width/1080.0)-region.left,
+                (int)Math.floor(1770*height/2400.0)-region.top,
+                (int)Math.ceil(415*width/1080.0)-region.left,
+                (int)Math.ceil(1840*height/2400.0)-region.top,iconFill);
+            final Bitmap modal=crop;
+            recognizer.process(InputImage.fromBitmap(modal,0)).addOnCompleteListener(task -> {
+                CheckoutSuccessResult result;
+                try {
+                    if (!task.isSuccessful()) result=successRejected(freshTimeMs,"offline-ocr-failed");
+                    else {
+                        List<Text.Line> observed=new ArrayList<>();
+                        for (Text.TextBlock block:task.getResult().getTextBlocks()) observed.addAll(block.getLines());
+                        observed.sort((a,b) -> Integer.compare(a.getBoundingBox() == null ? Integer.MAX_VALUE : a.getBoundingBox().top,
+                            b.getBoundingBox() == null ? Integer.MAX_VALUE : b.getBoundingBox().top));
+                        List<String> texts=new ArrayList<>();
+                        for (Text.Line line:observed) texts.add(line.getText());
+                        CheckoutSuccessParser.Result parsed=CheckoutSuccessParser.parse(texts);
+                        JSONObject diagnostics=new JSONObject(parsed.diagnostics);
+                        String reason=parsed.reason; Rect action=null; int validBounds=0;
+                        if (parsed.accepted) {
+                            int[] indexes={parsed.headingIndex,parsed.timeIndex,parsed.actionIndex};
+                            int[][] bands={{300,1760,800,1855},{200,1850,900,1950},{300,1990,800,2120}};
+                            for (int i=0;i<indexes.length;i++) {
+                                Rect box=observed.get(indexes[i]).getBoundingBox();
+                                if (box == null || box.isEmpty()) continue;
+                                Rect screen=new Rect(box); screen.offset(region.left,region.top);
+                                int[] reference=bands[i];
+                                Rect band=new Rect((int)Math.floor(reference[0]*width/1080.0),(int)Math.floor(reference[1]*height/2400.0),
+                                    (int)Math.ceil(reference[2]*width/1080.0),(int)Math.ceil(reference[3]*height/2400.0));
+                                if (band.contains(screen)) { validBounds++; if (i == 2) action=screen; }
+                            }
+                            if (validBounds != 3 || action == null) reason="success-modal-bounds-unconfirmed";
+                        }
+                        diagnostics.put("observedBandMatches",validBounds);
+                        result=new CheckoutSuccessResult(reason.isEmpty(),reason,parsed.date,parsed.checkOut,
+                            reason.isEmpty() ? action : null,freshTimeMs,diagnostics);
+                    }
+                } catch (RuntimeException exception) { result=successRejected(freshTimeMs,"success-modal-result-unconfirmed"); }
+                catch (org.json.JSONException exception) { result=successRejected(freshTimeMs,"success-modal-result-unconfirmed"); }
+                finally { release(modal); release(bitmap); recognizer.close(); }
+                deliverSuccess(callback,result);
+            });
+        } catch (RuntimeException exception) {
+            release(crop); release(bitmap); recognizer.close();
+            deliverSuccess(callback,successRejected(freshTimeMs,"ocr-setup-failed"));
+        }
+    }
+
+    private static CheckoutSuccessResult successRejected(long time,String reason) {
+        return new CheckoutSuccessResult(false,reason,null,null,null,time,new JSONObject());
+    }
+    private static void deliverSuccess(SuccessCallback callback,CheckoutSuccessResult result) {
+        if (Looper.myLooper() == Looper.getMainLooper()) callback.onResult(result);
+        else MAIN.post(() -> callback.onResult(result));
+    }
+
+    private static void enhancePlaceholderContrast(Bitmap crop) {
+        int width=crop.getWidth(),height=crop.getHeight();
+        int[] pixels=new int[width*height]; crop.getPixels(pixels,0,width,0,0,width,height);
+        for (int i=0;i<pixels.length;i++) {
+            int color=pixels[i];
+            int gray=(Color.red(color)*299+Color.green(color)*587+Color.blue(color)*114)/1000;
+            int contrast=Math.max(0,Math.min(255,(gray-200)*255/55));
+            pixels[i]=Color.rgb(contrast,contrast,contrast);
+        }
+        crop.setPixels(pixels,0,width,0,0,width,height);
+    }
+
+    private static EarlyCheckoutResult earlyRejected(long time,String reason) {
+        return new EarlyCheckoutResult(false,reason,null,time,new JSONObject());
+    }
+    private static void deliverEarly(EarlyCheckoutCallback callback,EarlyCheckoutResult result) {
+        if (Looper.myLooper() == Looper.getMainLooper()) callback.onResult(result);
+        else MAIN.post(() -> callback.onResult(result));
+    }
+    private static Result rejected(long freshTimeMs,String reason) { return new Result(false,reason,null,null,null,freshTimeMs,null,null,new JSONObject()); }
+    private static void release(Bitmap bitmap) { if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle(); }
+    private static void fail(Bitmap bitmap,long freshTimeMs,String reason,Callback callback) {
+        release(bitmap); deliver(callback,rejected(freshTimeMs,reason));
+    }
+    private static void deliver(Callback callback,Result result) {
+        if (Looper.myLooper() == Looper.getMainLooper()) callback.onResult(result);
+        else MAIN.post(() -> callback.onResult(result));
+    }
+}

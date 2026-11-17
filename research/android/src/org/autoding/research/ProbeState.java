@@ -12,6 +12,13 @@ import android.os.SystemClock;
 import org.json.JSONObject;
 
 final class ProbeState {
+    static synchronized boolean putChecked(Context context, String key, Object value) {
+        try {
+            JSONObject report = saved(context);
+            report.put(key, value); report.put("updatedAt", System.currentTimeMillis());
+            return context.getSharedPreferences("probe", 0).edit().putString("report", report.toString()).commit();
+        } catch (Exception ignored) { return false; }
+    }
     static synchronized void put(Context context, String key, Object value) {
         putValues(context, key, value);
     }
@@ -65,7 +72,7 @@ final class ProbeState {
             result.put("powered", battery != null && battery.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0);
             result.put("accessibilityConnected", ProbeAccessibilityService.active != null);
             result.put("exactAlarmAllowed", ((AlarmManager)context.getSystemService(Context.ALARM_SERVICE)).canScheduleExactAlarms());
-            result.put("hasPinStorage", false);
+            result.put("hasPinStorage", PinStore.isSaved(context));
             result.put("hasNetworkPermission", false);
         } catch (Exception ignored) {}
         return result;

@@ -5,7 +5,7 @@ import android.Manifest;
 import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.location.Criteria;
+import android.location.provider.ProviderProperties;
 import android.location.Location;
 import android.location.LocationManager;
 import android.os.Build;
@@ -93,7 +93,7 @@ public final class LocationProbe {
             if (providerPresent(manager)) manager.removeTestProvider(PROVIDER);
             touched = true;
             manager.addTestProvider(PROVIDER, false, false, false, false, true, true, true,
-                Criteria.POWER_LOW, Criteria.ACCURACY_FINE);
+                ProviderProperties.POWER_USAGE_LOW, ProviderProperties.ACCURACY_FINE);
             manager.setTestProviderEnabled(PROVIDER, true);
             Location fixture = new Location(PROVIDER);
             fixture.setLatitude(31.0);

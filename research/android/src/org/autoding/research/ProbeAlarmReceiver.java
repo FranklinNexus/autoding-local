@@ -9,6 +9,8 @@ import android.os.SystemClock;
 
 public final class ProbeAlarmReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context context, Intent intent) {
+        String trialId = intent == null ? null : intent.getStringExtra("trial_id");
+        if (trialId != null) { OneShotRunner.onAlarm(context, trialId); return; }
         String alarmId = intent == null ? "" : intent.getStringExtra("probe_alarm_id");
         if (alarmId == null || alarmId.isEmpty() || !alarmId.equals(ProbeState.saved(context).optString("alarmId", ""))) {
             ProbeState.put(context, "alarmIgnored", "stale-or-unidentified-probe");

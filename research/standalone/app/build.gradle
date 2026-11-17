@@ -1,0 +1,56 @@
+plugins { id 'com.android.application' }
+
+// Preserve the shared manifest. AGP 8 requires its old package attribute to
+// move to namespace, and the offline runtime removes transitive networking.
+def sharedManifest = file('../../android/AndroidManifest.xml')
+def researchManifest = layout.buildDirectory.file('generated/research/AndroidManifest.xml')
+def prepareManifest = tasks.register('prepareResearchManifest') {
+    inputs.file(sharedManifest)
+    outputs.file(researchManifest)
+    doLast {
+        def text = sharedManifest.getText('UTF-8')
+            .replaceFirst(/\s+package="[^"]*"/, '')
+            .replaceFirst(/\s+android:versionCode="[^"]*"/, '')
+            .replaceFirst(/\s+android:versionName="[^"]*"/, '')
+        if (!text.contains('xmlns:tools=')) {
+            text = text.replaceFirst('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ')
+        }
+        text = text.replace('</manifest>', '''    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+</manifest>''')
+        def target = researchManifest.get().asFile
+        target.parentFile.mkdirs()
+        target.setText(text, 'UTF-8')
+    }
+}
+
+android {
+    namespace 'org.autoding.research'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'org.autoding.research'
+        minSdk 31
+        targetSdk 33
+        versionCode 2
+        versionName '0.2-standalone-research'
+    }
+    sourceSets {
+        main {
+            java.srcDirs = ['../../android/src']
+            res.srcDirs = ['../../android/res']
+            manifest.srcFile researchManifest
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    // The build script signs the unsigned release with the existing research
+    // key and verifies its certificate; it never creates a replacement key.
+    buildTypes { release { minifyEnabled false } }
+}
+tasks.named('preBuild').configure { dependsOn prepareManifest }
+
+dependencies {
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
+}

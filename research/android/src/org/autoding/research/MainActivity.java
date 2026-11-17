@@ -25,9 +25,16 @@ public final class MainActivity extends Activity {
         scroll.addView(column); setContentView(scroll);
         TextView title = new TextView(this); title.setText("AutoDing 能力研究"); title.setTextSize(24); column.addView(title);
         TextView detail = new TextView(this);
-        detail.setText("独立实验：检查锁屏控件、截图和定时唤醒；位置测试使用专用合成源。此版本没有 PIN 存储或输入，不启动钉钉，不确认考勤。");
+        detail.setText("手机独立运行实验：定时唤醒、一次 PIN 解锁、打开钉钉、本机识别回执。一次测试结束即停止。日常定时仍由原 App 管理。更新下班测试会实际操作今天的下班卡。");
         column.addView(detail);
         add(column, "刷新能力报告", this::refresh);
+        add(column, "设置本机加密 PIN", () -> startActivity(new Intent(this, PinSetupActivity.class)));
+        add(column, "60 秒后独立读取考勤（不点击）", () -> scheduleTrial(false));
+        add(column, "60 秒后测试下班 / 更新下班卡", () -> new android.app.AlertDialog.Builder(this)
+            .setTitle("一次下班实测")
+            .setMessage("手机会在 60 秒后尝试解锁、打开考勤页并点击一次下班打卡。现在操作可能产生早退记录；当前已有下班卡时会尝试更新。结束后请核对钉钉记录。")
+            .setNegativeButton("取消", null).setPositiveButton("安排本次实测", (d,w) -> scheduleTrial(true)).show());
+        add(column, "取消本次独立测试", () -> { OneShotRunner.cancel(this); refresh(); });
         add(column, "打开无障碍设置", () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         add(column, "检查当前窗口与截图能力", () -> { ProbeAccessibilityService.requestScan(this); report.postDelayed(this::refresh, 1500); });
         add(column, "60 秒后运行一次唤醒检查", () -> {
@@ -47,8 +54,13 @@ public final class MainActivity extends Activity {
             runOnUiThread(this::refresh);
         }).start());
         report = new TextView(this); report.setTextIsSelectable(true); column.addView(report);
+        if (getIntent().getBooleanExtra("pin_setup", false)) startActivity(new Intent(this, PinSetupActivity.class));
     }
     @Override public void onResume() { super.onResume(); refresh(); }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent); setIntent(intent);
+        if (intent.getBooleanExtra("pin_setup", false)) startActivity(new Intent(this, PinSetupActivity.class));
+    }
     private void add(LinearLayout parent, String label, Runnable action) {
         Button button = new Button(this); button.setText(label); button.setOnClickListener(v -> action.run()); parent.addView(button);
     }
@@ -56,6 +68,10 @@ public final class MainActivity extends Activity {
         try { return new org.json.JSONObject(value); } catch (Exception ignored) { return new org.json.JSONObject(); }
     }
     private void refresh() { if (report != null) try { report.setText(ProbeState.status(this).toString(2)); } catch (Exception ignored) {} }
+    private void scheduleTrial(boolean checkout) {
+        try { OneShotRunner.schedule(this, checkout); refresh(); }
+        catch (Exception ignored) { android.widget.Toast.makeText(this, "测试尚未安排，请检查闹钟权限或当前任务。", android.widget.Toast.LENGTH_LONG).show(); }
+    }
     static void scheduleProbe(Context context) {
         scheduleProbe(context, false);
     }

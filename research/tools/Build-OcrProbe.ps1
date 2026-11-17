@@ -22,7 +22,7 @@ if (!$SdkPath) {
     $SdkPath = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android/Sdk' }
 }
 if (!(Test-Path -LiteralPath (Join-Path $SdkPath 'platforms/android-35/android.jar'))) { throw 'Install Android SDK Platform 35.' }
-$sdkProperty = [IO.Path]::GetFullPath($SdkPath).Replace('\','/')
+$sdkProperty = [IO.Path]::GetFullPath($SdkPath).Replace('\','/').Replace(':','\:')
 [IO.File]::WriteAllText((Join-Path $project 'local.properties'), 'sdk.dir=' + $sdkProperty + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 if (!$GradleUserHome) { $GradleUserHome = Join-Path $project 'build/gradle-home' }
 $options = @('--no-daemon','--console=plain','--gradle-user-home',$GradleUserHome,'-p',$project,':app:assembleDebug')

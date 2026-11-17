@@ -12,6 +12,12 @@ public final class ProbeBridgeReceiver extends BroadcastReceiver {
             if ("scan".equals(action)) ProbeAccessibilityService.requestScan(context);
             else if ("alarm".equals(action)) MainActivity.scheduleProbe(context);
             else if ("alarmclock".equals(action)) MainActivity.scheduleProbe(context, true);
+            else if ("trial-read".equals(action)) OneShotRunner.schedule(context, false, intent.getIntExtra("delay_seconds", 60));
+            else if ("read-current".equals(action)) OneShotRunner.readCurrent(context);
+            else if ("success-current".equals(action)) OneShotRunner.readSuccessCurrent(context);
+            else if ("checkout-current".equals(action)) OneShotRunner.readCurrent(context, true);
+            else if ("trial-checkout".equals(action)) OneShotRunner.schedule(context, true, intent.getIntExtra("delay_seconds", 60));
+            else if ("trial-cancel".equals(action)) OneShotRunner.cancel(context);
             else if ("location".equals(action)) ProbeState.put(context, "locationFixture", new org.json.JSONObject(LocationProbe.runMockFixture(context)));
             else if ("stop".equals(action)) LocationProbe.stop(context);
             setResultCode(1); setResultData(ProbeState.status(context).toString());

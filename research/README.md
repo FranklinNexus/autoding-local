@@ -1,6 +1,6 @@
 # AutoDing 手机能力研究
 
-本目录把“手机留在办公室、接电源、脱离电脑运行”和“Android 位置模拟能力”拆成独立实验。实验包与现有 AutoDing 使用不同包名，当前阶段验证 Android 能力及证据质量，尚未组成自动考勤流程。
+本目录把“手机留在办公室、接电源、脱离电脑运行”和“Android 位置模拟能力”拆成独立实验。实验包与现有 AutoDing 使用不同包名。原生研究包已集成一次定时、PIN 解锁、导航、新截图、本机 OCR、下班操作及自动回执核验；v21、v22 两次完整连电脑原生单次流程通过。v22 触发时 USB 仍连接，脱离电脑条件尚未验收；日常排程和长期稳定性也分别验收，研究版本尚未代替现有生产日常流程。
 
 截至 2026-11-17，实机结论以 [RESULTS.md](RESULTS.md) 的证据记录为准。编译成功、合成样例通过、定时器触发和官方考勤成功是四种不同结果。
 
@@ -8,25 +8,37 @@
 
 USB 连接下，`setAlarmClock` 单次对照在保持锁屏息屏时触发，比计划晚 `34ms`，同次窗口扫描与截图完成且编号匹配。普通 `setExactAndAllowWhileIdle` 在另一息屏试次中被系统后移，最终迟到 `2分55.970秒`。这些是本机单次能力测试，长期定时稳定性及其他机型仍待验收。
 
-OCR 安装后首次推理在应用没有网络权限的条件下通过，正确读取合成样例的 `09:18` / `18:22` 实际时间。手机整机断网对照、真实截图 OCR、手机本机 PIN 输入、拔 USB 接墙充、隔夜、重启及动态下班闭环仍待验证或集成，当前结果尚未构成手机完全独立打卡能力。
+OCR 安装后首次推理在应用没有网络权限的条件下通过，正确读取合成样例的 `09:18` / `18:22` 实际时间。v21 从锁屏息屏开始，原生定时、PIN 解锁、导航、截图 OCR、单次主动作和早退确认、成功弹窗识别、查看结果、有界返回及新页面回读均完成：签到保持 `09:25`，签退从 `13:10` 更新到 `13:21`，全程 `31.190s`。v22 延迟 180 秒后重复闭环通过，签退更新至 `13:26`，全程 `31.515s`，但两次报告 USB 均为连接状态；v22 未达拔线墙充条件，当前没有新研究试次待触发。隔夜、重启及动态下班规则仍单列验收，具体证据见 [RESULTS.md](RESULTS.md)。
 
 ## 当前产物
 
 | 产物 | 包名 / 入口 | 本阶段输出 |
 | --- | --- | --- |
-| 原生能力探针 | `org.autoding.research` / AutoDing 能力研究 | 锁屏状态、窗口结构计数、截图接口结果、60 秒定时唤醒结果 |
+| 原生独立运行研究包 | `org.autoding.research` / AutoDing 能力研究 | 原有能力报告，以及 60 秒单次定时、原生 PIN 解锁、导航、本机 OCR 和一次下班回执核验 |
 | 位置能力探针 | 同上，专用 `autoding_research` provider | 模拟应用选择状态、合成位置注入与回读、mock 标记、清理结果 |
 | 离线中文 OCR | `org.autoding.ocrprobe` / AutoDing OCR Research | 用户选图或内置样例的日期与实际上下班时间候选 |
 
 两个 App 的最低系统版本均为 Android API 31，当前 target API 为 33。华为、荣耀、小米、OPPO、vivo、三星等机型的后台管理和锁屏控件需要分别验收；品牌相同也应记录具体型号、系统构建及补丁版本。
 
-原生探针没有 PIN 存储或输入代码，没有自动点击、启动钉钉或写入考勤记录的动作。OCR App 使用独立的手工图片选择入口，尚未接通原生截图接口。两个 App 均未申请网络权限。
+当前带手势的原生考勤导航和早退确认限定已观察的华为 `JEF-AN00` / API 31 及 `1080×2400` 参考比例；其他配置返回 `layout-acceptance-required`。API 31 最低安装版本不代表所有机型均已通过原生操作验收。
+
+原生研究包会按本次选择执行只读试用或一次下班实测。PIN 通过手机本地窗口设置，以 AndroidKeyStore AES-GCM 加密后保存在应用私有 credential-encrypted 存储；报告仅显示是否已保存。独立 OCR App 仍保留手工选图和合成样例入口。两个 App 均未申请网络权限，图片和原始 OCR 文字不持久化。
 
 ## 路径一：手机留在办公室独立运行
 
 需要逐段验证：精确定时触发 → 唤醒与服务存活 → 保留 PIN 时解锁 → 打开目标页面 → 获取新画面 → 本机识别回执 → 核对官方考勤记录 → 按实际上班时间计算下班时间。
 
-本研究已经提供前三段中的定时、唤醒和锁屏结构探针，以及独立 OCR 探针。手机本机 PIN 输入、两个 App 的能力整合、目标页面导航、无人值守确认与生产调度接入属于后续工作。尤其是手机重启后首次凭据解锁，需与日常息屏解锁分开验收；系统 Direct Boot 支持本身不代表目标 App 的登录数据已经可用。
+`OneShotRunner` 已集成定时唤醒、原生 PIN 输入、目标页面导航、新截图与内置中文 OCR；下班实测在上下文核对通过后最多提交一次下班点击。若本次已启用的下班测试随后严格识别到“早退打卡”弹层，仅允许继续确认该动作一次，再读取新回执。成功弹窗及唯一结果链接精确识别后，有界返回并重新打开考勤页，核对同日、同一实际上班及新的实际下班时间。该完整链路在 v21 的 USB 连接试次通过，拔 USB 接墙充试次单独验收。研究包不写生产 AutoDing 状态，未接入日常排程或动态工作时长规则。手机重启后首次凭据解锁与日常息屏解锁分别验收；当前 PIN 密文使用 credential-encrypted 存储，重启后首次解锁需人工完成。
+
+### 一次独立运行试用
+
+1. 安装新版研究包，启用其无障碍服务，授予精确闹钟权限；按机型设置自启动及后台活动。
+2. 在手机“设置本机加密 PIN”窗口填写并保存 PIN，确认报告 `hasPinStorage=true`。PIN 只在本机设置，不放入命令行或日志。
+3. 先选择“60 秒后独立读取考勤（不点击）”，锁屏后等待。流程会尝试一次本机解锁、打开考勤页并识别当日实际时间，报告 `trial` 中记录阶段、锁屏/USB/电源状态及结果。
+4. 如当次试用需实际操作下班卡，再使用界面的一次下班实测入口。此入口会尝试产生或更新当天的下班记录，也可能产生早退记录；它仅处理明确的“下班打卡”，以及本次已启用流程中严格匹配的“早退打卡”继续确认，各最多一次。其他弹层或失配页面停止；结果由后续新截图和官方记录核对。
+5. 测试结束核对官方记录。试用执行完即停止；需要中止时选择“取消本次独立测试”。只读通过、点击请求完成、OCR 新回执通过、官方记录确认分别记证据。
+
+原生 PIN 输入仅针对已核实的系统数字键盘，一次输入失败后停止并保留本地阻断状态。PIN 保存使用本机 AndroidKeyStore AES-GCM；凭据及原始页面不写入报告。保留 PIN 的日常解锁、拔 USB 接墙充、隔夜和重启首次解锁分别测试。
 
 ### 原生探针操作
 
@@ -60,7 +72,7 @@ OCR 安装后首次推理在应用没有网络权限的条件下通过，正确�
 | `attendanceTabCount` / `punchLabelCount` | 目标页面结构计数；计数为正尚不证明存在有效回执 |
 | `screenshot.outcome` | `available` 表示得到图像缓冲区；`rejected` 连同 `errorCode` 记录系统结果 |
 | `imagePersisted=false` | 截图缓冲区在回调中释放，未保存图像 |
-| `hasPinStorage=false` / `hasNetworkPermission=false` | 本研究包的实现范围 |
+| `hasPinStorage` / `hasNetworkPermission=false` | 本机是否已有加密 PIN；研究包无网络权限 |
 | `alarmId` / `alarmFiredForId` / `alarmScanId` | 定时计划、实际触发及其扫描请求的关联 |
 | `scanId` / `requestedAt` / `completedAt` | 每次扫描与异步完成结果的编号、请求及完成时间 |
 | `alarmInteractiveBeforeWake` | 闹钟唤醒前屏幕是否处于交互状态；`false` 用于息屏条件核对 |
@@ -74,9 +86,9 @@ OCR 安装后首次推理在应用没有网络权限的条件下通过，正确�
 3. 点击“选择一张本机图片”，由 Android 文档选择器选图。真实图片按手机当前日期和时区解析，测试时将手机日期、时间和时区与办公室实际情况对齐。
 4. 核对候选结果与原图、官方记录。识别失败或出现 `unsupported-layout` 时保持待核实。
 
-当前裁剪区域仅对应 `1080×2400` 华为竖屏参考布局，支持相同比例缩放，宽高比偏差超过 `0.005` 时停止识别。即使宽高比相同，字体、显示缩放、导航栏或页面改版也可能让裁剪区域偏移，仍需按布局验证。选图任一边超过 5000 像素时退出读取。
+当前裁剪区域仅对应 `1080×2400` 华为竖屏参考布局，支持相同比例缩放，宽高比偏差超过 `0.005` 时停止识别。原生集成的下午卡右边界为 `840`，覆盖完整“已打卡”并避开“早退/更新”标签；两个卡片的软件副本在 OCR 前仅遮盖蓝圈勾图标区域，不遮实际时间或计划标签，详见 [集成说明](standalone/README.md)。未知文字前缀仍拒绝。独立 OCR App 保留原样例裁剪。即使宽高比相同，字体、显示缩放、导航栏或页面改版也可能让裁剪区域偏移，仍需按布局验证。选图任一边超过 5000 像素时退出读取。
 
-解析器检查当天日期与星期、页面动作、上下班卡片标签、“已打卡”实际时间、未来时间、重复或冲突记录及先后顺序。它仅返回时间和状态，不保存图片、原始 OCR 文本，也不向生产 AutoDing 回传记录。手工选图尚未绑定“刚刚采集的新页面”，因此同日旧截图的内容也可能成为候选；后续接入调度时必须增加采集时间和页面新鲜度证据。
+解析器检查当天日期与星期、页面动作、上下班卡片标签、“已打卡”实际时间、未来时间、重复或冲突记录及先后顺序。它仅返回时间和状态，不保存图片、原始 OCR 文本，也不向生产 AutoDing 回传记录。手工选图尚未绑定“刚刚采集的新页面”，因此同日旧截图的内容也可能成为候选；原生集成单独绑定新截图时间，点击前再核对窗口编号、布局版本和画面年龄。模块接入与实机读回正确性分别验收。
 
 华为首次安装后的合成样例推理已显示班次日期 `2026-11-05`、实际上班 `09:18`、实际下班 `18:22`。安装包及设备包信息均未含 `INTERNET` / `ACCESS_NETWORK_STATE` 权限。本次保留手机原有网络状态，因此仅将“应用无网络权限下首次推理”计为通过；整机主动断网后的对照仍单列待测。
 
@@ -95,22 +107,25 @@ OCR 安装后首次推理在应用没有网络权限的条件下通过，正确�
 
 ## 构建与本地验证
 
-在仓库根目录使用 PowerShell 7。原生构建需要可用的 JDK、Android SDK Platform 35、Build Tools 35.0.0；OCR 构建另需 Gradle 8.14.3 和与 Android Gradle Plugin 8.13.2 相容的 JDK。脚本从 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或默认 SDK 目录解析 SDK，也支持显式传参。
+在仓库根目录使用 PowerShell 7。两个研究 App 均使用 JDK 17、Gradle 8.14.3、Android SDK Platform 35、Build Tools 35.0.0 及 Android Gradle Plugin 8.13.2。脚本从 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或默认 SDK 目录解析 SDK，也支持显式传参。
 
 ```powershell
-pwsh -File research/tools/Build-Research.ps1 -SdkPath 'PATH_TO_ANDROID_SDK'
+pwsh -File research/tools/Build-Standalone.ps1 -SdkPath 'PATH_TO_ANDROID_SDK'
 pwsh -File research/tools/Build-OcrProbe.ps1 -GradlePath 'PATH_TO_GRADLE/gradle.bat' -SdkPath 'PATH_TO_ANDROID_SDK'
 pwsh -File research/test/Test-LocationProbe.ps1
 pwsh -File research/ocr/test/Test-ReceiptParser.ps1
+pwsh -File research/standalone/test/Test-ReceiptParser.ps1
 ```
 
-原生 APK 输出为 `build/AutoDing-research.apk`，使用本地研究测试签名。OCR APK 输出为 `research/ocr/build/distribution/AutoDing-OcrProbe-debug.apk`，同目录生成 SHA-256 文件。它们均为研究构建。
+集成 APK 输出为 `build/AutoDing-standalone-research.apk` 及 SHA-256 文件，包名 `org.autoding.research`，versionCode 2，使用本地研究测试签名。旧入口 `Build-Research.ps1` 已兼容委托同一 Gradle 流程，并将相同 APK 复制到旧路径 `build/AutoDing-research.apk`。OCR APK 输出为 `research/ocr/build/distribution/AutoDing-OcrProbe-debug.apk`，同目录生成 SHA-256 文件。它们均为研究构建。
 
-OCR 首次构建需要下载 Gradle/Maven 依赖，构建机联网与手机 App 联网是独立条件。缓存完整时可给 OCR 构建脚本加 `-Offline`；构建脚本还会检查合并后的 APK 未含网络权限。
+首次克隆如尚无 `build/research-test.jks`，集成构建会生成本机测试密钥；后续构建复用已有文件，绝不覆盖。该密钥被 Git 忽略，应保留备份。更新手机现有安装要求使用原安装的同一签名，因此另一台电脑新生成的测试密钥只适合首次安装到自己的设备；更新已有设备需复用其原构建密钥。该测试签名不作为正式发行凭据，密钥也不加入仓库。
+
+首次构建需要下载 Gradle/Maven 依赖，构建机联网与手机 App 联网是独立条件。缓存完整时可给构建脚本加 `-Offline`，也可通过 `-GradleUserHome` 指定已有研究缓存。集成和 OCR 构建均核查合并 APK 的网络权限、内置中文模型与 ARM 库；集成包还核对签名证书。
 
 位置夹具测试使用 Java 测试替身验证分支、mock 标记、异常路径和专用源清理；OCR 夹具测试直接验证纯 Java 解析器。这些测试不调用真实手机或 OCR 引擎。位置夹具里的旧 API 分支测试也不扩大 APK 的 API 31 最低版本范围。
 
-本轮原生研究 APK 构建、39 项位置夹具检查、OCR 最终构建和离线重建、APK 验签、合并 Manifest 的网络权限检查、内置模型及 ARM 库核查、21 项回执解析检查均已通过。离线重建证明构建缓存完整，与手机首次断网推理是独立验收项。
+前序原生探针构建、39 项位置夹具检查、独立 OCR 构建和离线重建、APK 验签、网络权限检查、内置模型及 ARM 库核查、21 项独立回执解析检查已通过；最终原生版本另记录 37 项解锁、29 项集成回执、28 项早退确认及 17 项成功弹窗纯 Java 检查，release lint 为 0 错误、17 警告。这些夹具不访问真实手机，也不代替 OCR、提交及回执的实机验收；试次证据见 [RESULTS.md](RESULTS.md)。离线重建证明构建缓存完整，与手机首次断网推理是独立验收项。
 
 ### 可选 ADB 研究接口
 
@@ -121,21 +136,24 @@ adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.
 adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.research/.ProbeBridgeReceiver --es operation scan
 adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.research/.ProbeBridgeReceiver --es operation alarm
 adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.research/.ProbeBridgeReceiver --es operation alarmclock
+adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.research/.ProbeBridgeReceiver --es operation trial-read
+adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.research/.ProbeBridgeReceiver --es operation trial-cancel
 adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.research/.ProbeBridgeReceiver --es operation location
 adb -s SERIAL shell am broadcast -a org.autoding.research.PROBE -n org.autoding.research/.ProbeBridgeReceiver --es operation stop
 ```
 
-示例统一使用显式 action `org.autoding.research.PROBE`。省略 `operation` 时返回报告；`scan` 提交异步窗口与截图检查，`alarm` 安排 60 秒后的普通单次检查，`alarmclock` 安排系统闹钟接口的单次对照，`location` 运行专用位置源实验，`stop` 仅清理该专用位置源。ADB 控制用于研究观测，不计入“脱离电脑运行”的验收证据。
+示例统一使用显式 action `org.autoding.research.PROBE`。省略 `operation` 时返回报告；`scan` 提交异步窗口与截图检查，`alarm` 安排 60 秒后的普通单次检查，`alarmclock` 安排系统闹钟接口的单次对照，`trial-read` 安排独立只读试用，`trial-cancel` 取消本次试用，`location` 运行专用位置源实验，`stop` 仅清理该专用位置源。实际下班操作优先使用手机界面的当次确认入口。ADB 控制用于研究观测，不计入“脱离电脑运行”的验收证据。
 
 ## 后续验收门槛
 
 | 阶段 | 通过条件 | 本阶段范围 |
 | --- | --- | --- |
-| E1 锁屏和截图 | 指定机型的窗口结构、PIN 页候选与截图结果明确 | 本轮华为解锁及 PIN 页通过；目标回执内容与截图失败路径待测 |
-| E2 离线中文识别 | 应用无网络权限下首次推理成功；整机断网对照、真实布局与反例分别验证 | 华为首次合成推理通过；整机断网对照和真实图片待测 |
+| E1 锁屏和截图 | 指定机型的窗口结构、PIN 页候选与截图结果明确 | 本轮华为解锁、PIN 页和真实考勤页采集通过；截图失败路径待测 |
+| E2 离线中文识别 | 应用无网络权限下首次推理成功；整机断网对照、真实布局与反例分别验证 | 华为首次合成推理通过；新版已接原生截图，真实识别结果见 RESULTS |
 | E3 单次定时唤醒 | 锁屏息屏时按计划触发、扫描结束；墙上电源与 USB 拔出条件独立复测 | USB 连接下系统闹钟接口单次晚 34ms，同次扫描/截图通过；普通接口实测后移，拔 USB 接墙充待测 |
-| E4 手机本机 PIN 解锁 | 单独设计用户当次启用、一次输入、失败即停止的实验；验证凭据保护及正确窗口 | 研究 App 尚未实现或测试；PC 安装解锁不计入 |
-| E5 独立完整流程 | USB 拔出，墙上电源，定时至官方记录及新回执完整闭环；按实际上班时间决定下班时刻 | 真实截图 OCR 与动态下班闭环尚未集成 |
+| E4 手机本机 PIN 解锁 | 用户当次启用、一次输入、失败即停止；验证凭据保护及正确窗口 | 已实现 AndroidKeyStore 加密存储和原生一次输入；实机验收见 RESULTS，PC 解锁不计入 |
+| E5a 单次完整流程 | 锁屏息屏开始，原生定时至提交、结果导航及新回执闭环 | v21、v22 两次连电脑通过，自动确认签退 `13:21`、`13:26`；v22 仍有 USB 连接，拔线墙充另行验收 |
+| E5b 手机日常排程 | 手机本机每日排程、依实际上班时间决定下班时刻 | 研究原型尚未接入，单次完整流程通过不代表每日无人值守运行 |
 | E6 长时与故障 | 隔夜、断网恢复、服务终止、权限撤回、重启后首次解锁分别验证，失败保持待核实 | 待设计与验收 |
 | L1 专用位置源 | 注入、回读、mock 标记和清理均有实机证据 | 本轮华为成功路径通过；已恢复 mock app-op 并撤销研究位置权限 |
 
