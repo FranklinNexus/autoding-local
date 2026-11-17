@@ -1,0 +1,24 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'org.autoding.ocrprobe'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'org.autoding.ocrprobe'
+        minSdk 31
+        targetSdk 33
+        versionCode 1
+        versionName '0.1-research'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    buildTypes { release { minifyEnabled false } }
+}
+
+dependencies {
+    // The bundled artifact ships the Chinese model in the APK. Deliberately
+    // avoid play-services-mlkit-* which downloads a model after installation.
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
+}
