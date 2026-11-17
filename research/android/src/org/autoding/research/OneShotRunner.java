@@ -45,6 +45,9 @@ public final class OneShotRunner {
         return schedule(context, checkout, 60);
     }
     public static synchronized String schedule(Context context, boolean checkout, int delaySeconds) throws Exception {
+        return schedule(context, checkout, delaySeconds, false);
+    }
+    public static synchronized String schedule(Context context, boolean checkout, int delaySeconds, boolean requireDetached) throws Exception {
         if (active != null) throw new IllegalStateException("trial-already-running");
         if (delaySeconds < 60 || delaySeconds > 600) throw new IllegalArgumentException("trial-delay-out-of-range");
         AlarmManager alarms = (AlarmManager)context.getSystemService(Context.ALARM_SERVICE);
@@ -57,6 +60,7 @@ public final class OneShotRunner {
         report.put("scheduledElapsed", SystemClock.elapsedRealtime() + delaySeconds * 1000L);
         report.put("computerExecutionRequired", false);
         report.put("writesProductionState", false);
+        report.put("requiresDetachedCharger", requireDetached);
         Intent intent = new Intent(context, ProbeAlarmReceiver.class).putExtra("trial_id", id);
         PendingIntent target = PendingIntent.getBroadcast(context, 101, intent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -149,6 +153,10 @@ public final class OneShotRunner {
             if (Math.abs(System.currentTimeMillis() - evidence.optLong("scheduledAt")) > 120000) {
                 finish("trial-expired"); return;
             }
+            String startRejection = TrialStartGuard.rejection(evidence.optBoolean("requiresDetachedCharger"),
+                usb != null, usb != null && usb.getBooleanExtra("connected", false),
+                evidence.optInt("powerSourceAtStart", -1), locked(), power.isInteractive());
+            if (!startRejection.isEmpty()) { finish(startRejection); return; }
             wake = power.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
                 "AutoDingResearch:one-shot");
             wake.acquire(155000);

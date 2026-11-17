@@ -17,6 +17,7 @@ public final class ProbeBridgeReceiver extends BroadcastReceiver {
             else if ("success-current".equals(action)) OneShotRunner.readSuccessCurrent(context);
             else if ("checkout-current".equals(action)) OneShotRunner.readCurrent(context, true);
             else if ("trial-checkout".equals(action)) OneShotRunner.schedule(context, true, intent.getIntExtra("delay_seconds", 60));
+            else if ("trial-checkout-wall".equals(action)) OneShotRunner.schedule(context, true, intent.getIntExtra("delay_seconds", 180), true);
             else if ("trial-cancel".equals(action)) OneShotRunner.cancel(context);
             else if ("location".equals(action)) ProbeState.put(context, "locationFixture", new org.json.JSONObject(LocationProbe.runMockFixture(context)));
             else if ("stop".equals(action)) LocationProbe.stop(context);

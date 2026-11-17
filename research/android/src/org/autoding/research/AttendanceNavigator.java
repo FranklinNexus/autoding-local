@@ -690,7 +690,7 @@ public final class AttendanceNavigator {
                     || Math.abs(metrics.widthPixels / (double)metrics.heightPixels - 1080.0 / 2400.0) > 0.005) {
                 finish("layout-acceptance-required"); return;
             }
-            float x1 = 250f * metrics.widthPixels / 1080f, x2 = 850f * metrics.widthPixels / 1080f;
+            float x1 = 150f * metrics.widthPixels / 1080f, x2 = 950f * metrics.widthPixels / 1080f;
             float y = 625f * metrics.heightPixels / 2400f;
             if (!window.rootBounds.contains((int)x1, (int)y) || !window.rootBounds.contains((int)x2, (int)y)) {
                 finish("attendance-header-bounds-rejected"); return;
@@ -701,7 +701,7 @@ public final class AttendanceNavigator {
             normalizationRequested = true; // Exactly one reference-profile swipe.
             Path path = new Path(); path.moveTo(x1, y); path.lineTo(x2, y);
             GestureDescription gesture = new GestureDescription.Builder()
-                .addStroke(new GestureDescription.StrokeDescription(path, 0, 450)).build();
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, 800)).build();
             boolean accepted = service.dispatchGesture(gesture, new AccessibilityService.GestureResultCallback() {
                 @Override public void onCompleted(GestureDescription description) {
                     if (finished || CANCEL_EPOCH.get() != epoch) return;
@@ -720,7 +720,7 @@ public final class AttendanceNavigator {
                             normalizationComplete = true;
                             finish("attendance-page-ready");
                         } catch (RuntimeException ignored) { finish("attendance-header-read-failed"); }
-                    }, 600);
+                    }, 1000);
                 }
                 @Override public void onCancelled(GestureDescription description) {
                     if (finished || CANCEL_EPOCH.get() != epoch) return;

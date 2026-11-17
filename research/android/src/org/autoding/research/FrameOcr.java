@@ -304,63 +304,94 @@ public final class FrameOcr {
         catch (RuntimeException exception) {
             release(bitmap); deliverSuccess(callback,successRejected(freshTimeMs,"ocr-model-unavailable")); return;
         }
-        Rect region=new Rect((int)Math.floor(115*width/1080.0),(int)Math.floor(1750*height/2400.0),
-            (int)Math.ceil(967*width/1080.0),(int)Math.ceil(2140*height/2400.0));
-        Bitmap crop=null;
+        // Keep the complete modal as context; independently read the heading
+        // without the icon, replacing only its single observed heading-band line.
+        int[][] sources={{115,1750,967,2140},{420,1760,800,1860}};
+        List<Bitmap> crops=new ArrayList<>();
+        List<Rect> regions=new ArrayList<>();
+        List<Task<Text>> tasks=new ArrayList<>();
+        String setupReason=null;
         try {
-            crop=Bitmap.createBitmap(bitmap,region.left,region.top,region.width(),region.height());
-            Bitmap original=crop;
-            try { crop=original.copy(Bitmap.Config.ARGB_8888,true); }
-            finally { if (original != bitmap) release(original); }
-            if (crop == null) throw new IllegalStateException("mutable-crop-unavailable");
-            Paint iconFill=new Paint(); iconFill.setColor(Color.WHITE);
-            new Canvas(crop).drawRect(
-                (int)Math.floor(350*width/1080.0)-region.left,
-                (int)Math.floor(1770*height/2400.0)-region.top,
-                (int)Math.ceil(415*width/1080.0)-region.left,
-                (int)Math.ceil(1840*height/2400.0)-region.top,iconFill);
-            final Bitmap modal=crop;
-            recognizer.process(InputImage.fromBitmap(modal,0)).addOnCompleteListener(task -> {
-                CheckoutSuccessResult result;
-                try {
-                    if (!task.isSuccessful()) result=successRejected(freshTimeMs,"offline-ocr-failed");
-                    else {
-                        List<Text.Line> observed=new ArrayList<>();
-                        for (Text.TextBlock block:task.getResult().getTextBlocks()) observed.addAll(block.getLines());
-                        observed.sort((a,b) -> Integer.compare(a.getBoundingBox() == null ? Integer.MAX_VALUE : a.getBoundingBox().top,
-                            b.getBoundingBox() == null ? Integer.MAX_VALUE : b.getBoundingBox().top));
-                        List<String> texts=new ArrayList<>();
-                        for (Text.Line line:observed) texts.add(line.getText());
-                        CheckoutSuccessParser.Result parsed=CheckoutSuccessParser.parse(texts);
-                        JSONObject diagnostics=new JSONObject(parsed.diagnostics);
-                        String reason=parsed.reason; Rect action=null; int validBounds=0;
-                        if (parsed.accepted) {
-                            int[] indexes={parsed.headingIndex,parsed.timeIndex,parsed.actionIndex};
-                            int[][] bands={{300,1760,800,1855},{200,1850,900,1950},{300,1990,800,2120}};
-                            for (int i=0;i<indexes.length;i++) {
-                                Rect box=observed.get(indexes[i]).getBoundingBox();
-                                if (box == null || box.isEmpty()) continue;
-                                Rect screen=new Rect(box); screen.offset(region.left,region.top);
-                                int[] reference=bands[i];
-                                Rect band=new Rect((int)Math.floor(reference[0]*width/1080.0),(int)Math.floor(reference[1]*height/2400.0),
-                                    (int)Math.ceil(reference[2]*width/1080.0),(int)Math.ceil(reference[3]*height/2400.0));
-                                if (band.contains(screen)) { validBounds++; if (i == 2) action=screen; }
-                            }
-                            if (validBounds != 3 || action == null) reason="success-modal-bounds-unconfirmed";
+            for (int i=0;i<sources.length;i++) {
+                int[] source=sources[i];
+                Rect region=new Rect((int)Math.floor(source[0]*width/1080.0),(int)Math.floor(source[1]*height/2400.0),
+                    (int)Math.ceil(source[2]*width/1080.0),(int)Math.ceil(source[3]*height/2400.0));
+                Bitmap crop=Bitmap.createBitmap(bitmap,region.left,region.top,region.width(),region.height());
+                if (i == 0) {
+                    Bitmap original=crop;
+                    try { crop=original.copy(Bitmap.Config.ARGB_8888,true); }
+                    finally { if (original != bitmap) release(original); }
+                    if (crop == null) throw new IllegalStateException("mutable-crop-unavailable");
+                    Paint fill=new Paint(); fill.setColor(Color.WHITE);
+                    new Canvas(crop).drawRect((int)Math.floor(350*width/1080.0)-region.left,
+                        (int)Math.floor(1770*height/2400.0)-region.top,
+                        (int)Math.ceil(415*width/1080.0)-region.left,
+                        (int)Math.ceil(1840*height/2400.0)-region.top,fill);
+                }
+                crops.add(crop); regions.add(region);
+                tasks.add(recognizer.process(InputImage.fromBitmap(crop,0)));
+            }
+        } catch (RuntimeException exception) { setupReason="ocr-setup-failed"; }
+        final String failure=setupReason;
+        Tasks.whenAllComplete(tasks).addOnCompleteListener(done -> {
+            CheckoutSuccessResult result;
+            try {
+                boolean successful=failure == null && tasks.size() == 2;
+                for (Task<Text> task:tasks) successful &= task.isSuccessful();
+                if (!successful) result=successRejected(freshTimeMs,failure == null ? "offline-ocr-failed" : failure);
+                else {
+                    List<Text.Line> observed=new ArrayList<>(),headingLines=new ArrayList<>();
+                    for (Text.TextBlock block:tasks.get(0).getResult().getTextBlocks()) observed.addAll(block.getLines());
+                    for (Text.TextBlock block:tasks.get(1).getResult().getTextBlocks()) headingLines.addAll(block.getLines());
+                    observed.sort((a,b) -> Integer.compare(a.getBoundingBox() == null ? Integer.MAX_VALUE : a.getBoundingBox().top,
+                        b.getBoundingBox() == null ? Integer.MAX_VALUE : b.getBoundingBox().top));
+                    Rect headingBand=new Rect((int)Math.floor(300*width/1080.0),(int)Math.floor(1760*height/2400.0),
+                        (int)Math.ceil(800*width/1080.0),(int)Math.ceil(1860*height/2400.0));
+                    boolean independentHeading=false; Rect independentBox=null;
+                    if (headingLines.size() == 1) {
+                        Text.Line line=headingLines.get(0); Rect box=line.getBoundingBox();
+                        if (box != null && !box.isEmpty()) {
+                            independentBox=new Rect(box); independentBox.offset(regions.get(1).left,regions.get(1).top);
+                            independentHeading="下班打卡成功".equals(CheckoutSuccessParser.normalize(line.getText())) &&
+                                headingBand.contains(independentBox) && regions.get(1).contains(independentBox);
                         }
-                        diagnostics.put("observedBandMatches",validBounds);
-                        result=new CheckoutSuccessResult(reason.isEmpty(),reason,parsed.date,parsed.checkOut,
-                            reason.isEmpty() ? action : null,freshTimeMs,diagnostics);
                     }
-                } catch (RuntimeException exception) { result=successRejected(freshTimeMs,"success-modal-result-unconfirmed"); }
-                catch (org.json.JSONException exception) { result=successRejected(freshTimeMs,"success-modal-result-unconfirmed"); }
-                finally { release(modal); release(bitmap); recognizer.close(); }
-                deliverSuccess(callback,result);
-            });
-        } catch (RuntimeException exception) {
-            release(crop); release(bitmap); recognizer.close();
-            deliverSuccess(callback,successRejected(freshTimeMs,"ocr-setup-failed"));
-        }
+                    List<String> texts=new ArrayList<>(); List<Rect> boxes=new ArrayList<>();
+                    int contextHeadingCount=0;
+                    for (Text.Line line:observed) {
+                        Rect box=line.getBoundingBox(),screen=box == null ? null : new Rect(box);
+                        if (screen != null) screen.offset(regions.get(0).left,regions.get(0).top);
+                        boolean inHeading=screen != null && !screen.isEmpty() && headingBand.contains(screen);
+                        if (inHeading) contextHeadingCount++;
+                        texts.add(inHeading && independentHeading ? "下班打卡成功" : line.getText());
+                        boxes.add(inHeading && independentHeading ? independentBox : screen);
+                    }
+                    CheckoutSuccessParser.Result parsed=CheckoutSuccessParser.parse(texts);
+                    JSONObject diagnostics=new JSONObject(parsed.diagnostics);
+                    diagnostics.put("headingLineCount",headingLines.size()); diagnostics.put("independentHeadingExact",independentHeading);
+                    diagnostics.put("contextHeadingLineCount",contextHeadingCount);
+                    String reason=parsed.reason; Rect action=null; int validBounds=0;
+                    if (!independentHeading || contextHeadingCount != 1) reason="success-modal-heading-band-unconfirmed";
+                    else if (parsed.accepted) {
+                        int[] indexes={parsed.headingIndex,parsed.timeIndex,parsed.actionIndex};
+                        int[][] bands={{420,1760,800,1860},{200,1850,900,1950},{300,1990,800,2120}};
+                        for (int i=0;i<indexes.length;i++) {
+                            Rect screen=boxes.get(indexes[i]); int[] reference=bands[i];
+                            Rect band=new Rect((int)Math.floor(reference[0]*width/1080.0),(int)Math.floor(reference[1]*height/2400.0),
+                                (int)Math.ceil(reference[2]*width/1080.0),(int)Math.ceil(reference[3]*height/2400.0));
+                            if (screen != null && !screen.isEmpty() && band.contains(screen)) { validBounds++; if (i == 2) action=screen; }
+                        }
+                        if (validBounds != 3 || action == null) reason="success-modal-bounds-unconfirmed";
+                    }
+                    diagnostics.put("observedBandMatches",validBounds);
+                    result=new CheckoutSuccessResult(reason.isEmpty(),reason,parsed.date,parsed.checkOut,
+                        reason.isEmpty() ? action : null,freshTimeMs,diagnostics);
+                }
+            } catch (RuntimeException exception) { result=successRejected(freshTimeMs,"success-modal-result-unconfirmed"); }
+            catch (org.json.JSONException exception) { result=successRejected(freshTimeMs,"success-modal-result-unconfirmed"); }
+            finally { for (Bitmap crop:crops) release(crop); release(bitmap); recognizer.close(); }
+            deliverSuccess(callback,result);
+        });
     }
 
     private static CheckoutSuccessResult successRejected(long time,String reason) {
