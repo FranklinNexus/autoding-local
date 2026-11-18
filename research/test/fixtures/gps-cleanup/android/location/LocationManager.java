@@ -1,0 +1,1 @@
+package android.location;public class LocationManager {public static final String GPS_PROVIDER="gps";public int calls;public String provider;public boolean fail;public void removeTestProvider(String name){calls++;provider=name;if(fail)throw new SecurityException();}}

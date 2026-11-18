@@ -7,7 +7,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <queries><package android:name="com.alibaba.android.rimet" /></queries>
-    <application android:label="AutoDing 能力研究" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
+    <application android:icon="@mipmap/ic_autoding" android:roundIcon="@mipmap/ic_autoding" android:label="AutoDing" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
+        <activity android:name=".LocationLabActivity" android:exported="false" />
+        <receiver android:name=".LocationLabCleanupReceiver" android:exported="false" />
         <activity android:name=".DiagnosticsActivity" android:exported="false" />
         <activity android:name=".PinSetupActivity" android:exported="false" android:excludeFromRecents="true" />
         <activity android:name=".MainActivity" android:exported="true">

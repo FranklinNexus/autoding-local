@@ -87,6 +87,7 @@ public final class DiagnosticsActivity extends Activity {
                 startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + getPackageName())));
             } else { scheduleProbe(this, true); refresh(); }
         });
+        add(column, "定位实验：固定当前地点 30 秒", () -> startActivity(new Intent(this, LocationLabActivity.class)));
         add(column, "授予本实验位置权限", () -> requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION}, 1));
         add(column, "检查位置模拟能力", () -> { ProbeState.put(this, "locationInspection", json(LocationProbe.inspect(this))); refresh(); });
         add(column, "运行专用位置源实验", () -> new Thread(() -> {
