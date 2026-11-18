@@ -74,6 +74,7 @@ final class ProbeState {
             result.put("exactAlarmAllowed", ((AlarmManager)context.getSystemService(Context.ALARM_SERVICE)).canScheduleExactAlarms());
             result.put("hasPinStorage", PinStore.isSaved(context));
             result.put("hasNetworkPermission", false);
+            result.put("nativeSchedule", NativeTrialScheduler.status(context));
         } catch (Exception ignored) {}
         return result;
     }

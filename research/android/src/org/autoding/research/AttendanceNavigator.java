@@ -344,6 +344,16 @@ public final class AttendanceNavigator {
 
     private static void clickCheckoutInternal(AccessibilityService service, String actionLabel,
             Rect actionBounds, CheckoutContext context, BooleanSupplier freshness, Callback callback) {
+        clickPunchInternal(service, actionLabel, actionBounds, context, freshness, false, callback);
+    }
+    public static void clickCheckIn(AccessibilityService service, String actionLabel,
+            Rect actionBounds, BooleanSupplier freshness, Callback callback) {
+        if (callback == null) throw new IllegalArgumentException("callback-required");
+        clickPunchInternal(service, actionLabel, actionBounds, null, freshness, true,
+            code -> callback.onResult(code.replace("checkout-", "checkin-")));
+    }
+    private static void clickPunchInternal(AccessibilityService service, String actionLabel,
+            Rect actionBounds, CheckoutContext context, BooleanSupplier freshness, boolean morning, Callback callback) {
         if (callback == null) throw new IllegalArgumentException("callback-required");
         final Rect supplied = actionBounds == null ? null : new Rect(actionBounds);
         final long epoch = CANCEL_EPOCH.get();
@@ -365,9 +375,12 @@ public final class AttendanceNavigator {
             if (!fresh(freshness)) { once.onResult("checkout-context-expired"); return; }
             String blocked = guard(service);
             if (blocked != null) { once.onResult(blocked); return; }
-            boolean update = "更新打卡".equals(actionLabel);
-            if (!"下班打卡".equals(actionLabel) && !update) {
+            boolean update = !morning && "更新打卡".equals(actionLabel);
+            if (!(morning ? "上班打卡" : "下班打卡").equals(actionLabel) && !update) {
                 once.onResult("checkout-action-label-rejected"); return;
+            }
+            if (morning && (!"JEF-AN00".equals(Build.MODEL) || Build.VERSION.SDK_INT != 31)) {
+                once.onResult("layout-acceptance-required"); return;
             }
             if (context != null) {
                 blocked = contextGuard(context);
@@ -384,7 +397,7 @@ public final class AttendanceNavigator {
                 if (!validActionBounds(service, supplied, window.rootBounds)) {
                     once.onResult("checkout-action-bounds-rejected"); return;
                 }
-                List<AccessibilityNodeInfo> matches = update ? window.updateLabels : window.checkoutLabels;
+                List<AccessibilityNodeInfo> matches = morning ? window.checkinLabels : update ? window.updateLabels : window.checkoutLabels;
                 if (matches.size() > 1) { once.onResult("checkout-action-ambiguous"); return; }
                 if (matches.size() == 1) {
                     Rect nodeBounds = new Rect(); matches.get(0).getBoundsInScreen(nodeBounds);
@@ -821,6 +834,7 @@ public final class AttendanceNavigator {
         final List<AccessibilityNodeInfo> owned = new ArrayList<>();
         final List<AccessibilityNodeInfo> shortcuts = new ArrayList<>();
         final List<AccessibilityNodeInfo> checkoutLabels = new ArrayList<>();
+        final List<AccessibilityNodeInfo> checkinLabels = new ArrayList<>();
         final List<AccessibilityNodeInfo> updateLabels = new ArrayList<>();
         final List<AccessibilityNodeInfo> launcherIcons = new ArrayList<>();
         final List<AccessibilityNodeInfo> launcherWorkspaces = new ArrayList<>();
@@ -883,6 +897,7 @@ public final class AttendanceNavigator {
                         if ("android:id/button1".equals(id) && "确定".equals(label)) result.expiredConfirm.add(node);
                         if (SHORTCUT_ID.equals(id) && "打卡".equals(label)) result.shortcuts.add(node);
                         if ("下班打卡".equals(label) || "下班打卡".equals(description)) result.checkoutLabels.add(node);
+                        if ("上班打卡".equals(label) || "上班打卡".equals(description)) result.checkinLabels.add(node);
                         if ("更新打卡".equals(label) || "更新打卡".equals(description)) result.updateLabels.add(node);
                         if ("早退打卡".equals(label) || "早退打卡".equals(description)) result.earlyLabels.add(node);
                         if ((DING_PACKAGE + ":id/title").equals(id) && "统计".equals(label)) result.statsTitles.add(node);

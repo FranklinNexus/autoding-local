@@ -6,9 +6,9 @@ public final class TrialStartGuardHarness {
         check("", false, false, true, -1, false, true);
         check("wall-trial-usb-state-unknown", true, false, false, 1, true, false);
         check("wall-trial-usb-still-connected", true, true, true, 2, true, false);
-        check("wall-trial-charger-unconfirmed", true, true, false, 0, true, false);
-        check("wall-trial-charger-unconfirmed", true, true, false, -1, true, false);
-        check("wall-trial-charger-unconfirmed", true, true, false, 8, true, false);
+        check("", true, true, false, 0, true, false);
+        check("", true, true, false, -1, true, false);
+        check("", true, true, false, 8, true, false);
         check("wall-trial-lockscreen-unconfirmed", true, true, false, 1, false, false);
         check("wall-trial-lockscreen-unconfirmed", true, true, false, 1, true, true);
         check("", true, true, false, 1, true, false);

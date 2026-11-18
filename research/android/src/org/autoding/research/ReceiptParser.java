@@ -54,6 +54,11 @@ public final class ReceiptParser {
         return result;
     }
     private static Result rejected(String reason) { return new Result(false, reason, null, null, null); }
+    /** Original image text may prove an empty card without applying its checkmark mask. */
+    static boolean exactUnpunched(String text, String heading) {
+        try { return punch(lines(text), heading) == null; }
+        catch (IllegalArgumentException error) { return false; }
+    }
     public static Result parse(String morning, String evening, String dateText, ZonedDateTime now) {
         try {
             List<String> dates = lines(dateText);

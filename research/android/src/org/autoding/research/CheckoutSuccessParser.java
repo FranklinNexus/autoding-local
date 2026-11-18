@@ -10,17 +10,22 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Exact evidence for the one observed checkout-success modal. No raw output. */
+/** Exact success-modal schema with an explicitly selected punch kind. No raw output. */
 public final class CheckoutSuccessParser {
     private CheckoutSuccessParser() {}
     private static final Pattern TIMESTAMP=Pattern.compile("^打卡时间:(\\d{4})-(\\d{2})-(\\d{2})(\\d{2}):(\\d{2})$");
     public static final class Result {
         public final boolean accepted;
-        public final String reason,date,checkOut;
+        public final String reason,date;
+        /** Actual punch time for the selected kind; null on rejected evidence. */
+        public final String actualTime;
+        /** Legacy alias of actualTime, including results returned by parseMorning. */
+        public final String checkOut;
         public final int headingIndex,timeIndex,actionIndex;
         public final Map<String,Object> diagnostics;
         private Result(boolean accepted,String reason,String date,String checkOut,int headingIndex,int timeIndex,int actionIndex,Map<String,Object> diagnostics) {
             this.accepted=accepted; this.reason=reason; this.date=accepted ? date : null; this.checkOut=accepted ? checkOut : null;
+            this.actualTime=this.checkOut;
             this.headingIndex=headingIndex; this.timeIndex=timeIndex; this.actionIndex=actionIndex; this.diagnostics=diagnostics;
         }
     }
@@ -28,6 +33,13 @@ public final class CheckoutSuccessParser {
         return value == null ? "" : value.replaceAll("[\\s\\p{Z}\\p{Cf}]+", "").replace('：',':');
     }
     public static Result parse(List<String> lines) {
+        return parse(lines,"下班打卡成功");
+    }
+    /** Uses the same strict schema with only the exact morning success heading. */
+    public static Result parseMorning(List<String> lines) {
+        return parse(lines,"上班打卡成功");
+    }
+    private static Result parse(List<String> lines,String expectedHeading) {
         int heading=0,time=0,action=0,unknown=0,otherActions=0;
         int headingAt=-1,timeAt=-1,actionAt=-1;
         String date=null,checkOut=null; boolean invalidTime=false;
@@ -35,7 +47,7 @@ public final class CheckoutSuccessParser {
         for (int i=0;i<lines.size();i++) {
             String value=normalize(lines.get(i)); Matcher stamp=TIMESTAMP.matcher(value);
             String kind="unknown";
-            if (value.equals("下班打卡成功")) { heading++; headingAt=i; kind="success-heading-exact"; }
+            if (value.equals(expectedHeading)) { heading++; headingAt=i; kind="success-heading-exact"; }
             else if (value.equals("查看打卡结果")) { action++; actionAt=i; kind="view-result-exact"; }
             else if (stamp.matches()) {
                 time++; timeAt=i; kind="timestamp-exact-shape";

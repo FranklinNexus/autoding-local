@@ -133,6 +133,15 @@ public final class FrameOcr {
                 }
                 tasks.add(recognizer.process(InputImage.fromBitmap(crop,0)));
             }
+            // Unpunched text starts where the tick icon would be. Independently
+            // read both original cards; use them only for an exact empty schema.
+            for (int index=0;index<2;index++) {
+                int[] box=CROPS[index];
+                int left=(int)Math.floor(box[0]*width/1080.0), top=(int)Math.floor(box[1]*height/2400.0);
+                Bitmap crop=Bitmap.createBitmap(bitmap,left,top,(int)Math.ceil(box[2]*width/1080.0)-left,
+                    (int)Math.ceil(box[3]*height/2400.0)-top);
+                crops.add(crop); tasks.add(recognizer.process(InputImage.fromBitmap(crop,0)));
+            }
         } catch (RuntimeException exception) { setupReason="ocr-setup-failed"; }
         final String failure=setupReason;
         // Even partial setup may have issued native readers. Recycle only once
@@ -140,12 +149,15 @@ public final class FrameOcr {
         Tasks.whenAllComplete(tasks).addOnCompleteListener(done -> {
             Result result;
             try {
-                boolean success=failure == null && tasks.size() == 3;
+                boolean success=failure == null && tasks.size() == 5;
                 for (Task<Text> task:tasks) success &= task.isSuccessful();
                 if (!success) result=rejected(freshTimeMs,failure == null ? "offline-ocr-failed" : failure);
                 else {
                     String morning=tasks.get(0).getResult().getText(), evening=tasks.get(1).getResult().getText(),
                         dateText=tasks.get(2).getResult().getText();
+                    String rawMorning=tasks.get(3).getResult().getText(), rawEvening=tasks.get(4).getResult().getText();
+                    if (ReceiptParser.exactUnpunched(rawMorning,"上班")) morning=rawMorning;
+                    if (ReceiptParser.exactUnpunched(rawEvening,"下班")) evening=rawEvening;
                     JSONObject diagnostics=new JSONObject(ReceiptParser.diagnostics(morning,evening,dateText));
                     ReceiptParser.Result parsed=ReceiptParser.parse(morning,evening,dateText,frameTime);
                     String label=null; Rect bounds=null; int hits=0;
@@ -153,7 +165,7 @@ public final class FrameOcr {
                     for (Text.TextBlock block:tasks.get(2).getResult().getTextBlocks()) {
                         for (Text.Line line:block.getLines()) {
                             String value=line.getText().replaceAll("\\s+", "");
-                            if (!value.equals("下班打卡") && !value.equals("更新打卡")) continue;
+                            if (!value.equals("下班打卡") && !value.equals("更新打卡") && !value.equals("上班打卡")) continue;
                             hits++; label=value;
                             Rect box=line.getBoundingBox();
                             bounds=box == null || box.isEmpty() ? null : new Rect(box);
@@ -286,6 +298,13 @@ public final class FrameOcr {
 
     /** Reads only the observed success modal; never clicks its result action. */
     public static void recognizeCheckoutSuccess(Bitmap bitmap,long freshTimeMs,SuccessCallback callback) {
+        recognizeSuccess(bitmap,freshTimeMs,false,callback);
+    }
+    public static void recognizeCheckInSuccess(Bitmap bitmap,long freshTimeMs,SuccessCallback callback) {
+        recognizeSuccess(bitmap,freshTimeMs,true,callback);
+    }
+    private static void recognizeSuccess(Bitmap bitmap,long freshTimeMs,boolean morning,SuccessCallback callback) {
+        final String expectedHeading=morning ? "上班打卡成功" : "下班打卡成功";
         if (callback == null) { release(bitmap); throw new IllegalArgumentException("callback-required"); }
         if (bitmap == null || bitmap.isRecycled()) {
             release(bitmap); deliverSuccess(callback,successRejected(freshTimeMs,"frame-missing")); return;
@@ -352,7 +371,7 @@ public final class FrameOcr {
                         Text.Line line=headingLines.get(0); Rect box=line.getBoundingBox();
                         if (box != null && !box.isEmpty()) {
                             independentBox=new Rect(box); independentBox.offset(regions.get(1).left,regions.get(1).top);
-                            independentHeading="下班打卡成功".equals(CheckoutSuccessParser.normalize(line.getText())) &&
+                            independentHeading=expectedHeading.equals(CheckoutSuccessParser.normalize(line.getText())) &&
                                 headingBand.contains(independentBox) && regions.get(1).contains(independentBox);
                         }
                     }
@@ -363,10 +382,10 @@ public final class FrameOcr {
                         if (screen != null) screen.offset(regions.get(0).left,regions.get(0).top);
                         boolean inHeading=screen != null && !screen.isEmpty() && headingBand.contains(screen);
                         if (inHeading) contextHeadingCount++;
-                        texts.add(inHeading && independentHeading ? "下班打卡成功" : line.getText());
+                        texts.add(inHeading && independentHeading ? expectedHeading : line.getText());
                         boxes.add(inHeading && independentHeading ? independentBox : screen);
                     }
-                    CheckoutSuccessParser.Result parsed=CheckoutSuccessParser.parse(texts);
+                    CheckoutSuccessParser.Result parsed=morning ? CheckoutSuccessParser.parseMorning(texts) : CheckoutSuccessParser.parse(texts);
                     JSONObject diagnostics=new JSONObject(parsed.diagnostics);
                     diagnostics.put("headingLineCount",headingLines.size()); diagnostics.put("independentHeadingExact",independentHeading);
                     diagnostics.put("contextHeadingLineCount",contextHeadingCount);

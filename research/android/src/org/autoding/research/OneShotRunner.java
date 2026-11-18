@@ -19,13 +19,15 @@ import java.time.ZonedDateTime;
 import java.util.UUID;
 import org.json.JSONObject;
 
-/** Explicit single experiment. No recurring schedule or production-state write. */
+/** Bounded experiment runner; persistent dated jobs are owned by NativeTrialScheduler. */
 public final class OneShotRunner {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static OneShotRunner active;
     private final Context context;
     private final String id;
     private final boolean checkout;
+    private final boolean morning;
+    private final boolean scheduled;
     private final JSONObject evidence;
     private final long deadline = SystemClock.elapsedRealtime() + 150000;
     private PowerManager.WakeLock wake;
@@ -35,10 +37,28 @@ public final class OneShotRunner {
     private String expectedDate, expectedCheckIn;
     private int frameWindowId;
     private long frameLayoutVersion, frameContentVersion, frameRequestedElapsed;
+    public static synchronized boolean isActive() { return active != null; }
 
     private OneShotRunner(Context context, String id, boolean checkout, JSONObject evidence) {
         this.context = context.getApplicationContext(); this.id = id;
         this.checkout = checkout; this.evidence = evidence;
+        this.scheduled = evidence.has("jobId");
+        this.morning = scheduled && "MORNING".equals(evidence.optString("kind"));
+    }
+
+    public static synchronized boolean startScheduled(Context context, JSONObject job) {
+        if (active != null) return false;
+        try {
+            JSONObject report = new JSONObject(job.toString());
+            String id = job.getString("id");
+            report.put("jobId", id); report.put("status", "running");
+            report.put("clickCount", 0); report.put("earlyConfirmationCount", 0);
+            report.put("computerExecutionRequired", false); report.put("chargingRequired", false);
+            report.put("writesProductionState", false); report.put("requiresDetachedCharger", false);
+            if (!ProbeState.putChecked(context, "trial", report)) return false;
+            OneShotRunner run = new OneShotRunner(context, id, "EVENING".equals(job.getString("kind")), report);
+            active = run; run.start(); return true;
+        } catch (Exception error) { return false; }
     }
 
     public static synchronized String schedule(Context context, boolean checkout) throws Exception {
@@ -146,11 +166,14 @@ public final class OneShotRunner {
             evidence.put("lockedAtStart", locked()); evidence.put("interactiveAtStart", power.isInteractive());
             Intent battery = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
             evidence.put("powerSourceAtStart", battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1));
+            evidence.put("batteryLevelAtStart", battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1));
+            evidence.put("batteryScaleAtStart", battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1));
             Intent usb = context.registerReceiver(null, new IntentFilter("android.hardware.usb.action.USB_STATE"));
             evidence.put("usbConnectedAtStart", usb == null ? JSONObject.NULL : usb.getBooleanExtra("connected", false));
             evidence.put("status", "running");
             if (!save()) { finish("trial-consumption-save-failed"); return; } // Consume before any input.
-            if (Math.abs(System.currentTimeMillis() - evidence.optLong("scheduledAt")) > 120000) {
+            long lateness = System.currentTimeMillis() - evidence.optLong("scheduledAt");
+            if (lateness < -2000 || lateness > (scheduled ? 900000 : 120000)) {
                 finish("trial-expired"); return;
             }
             String startRejection = TrialStartGuard.rejection(evidence.optBoolean("requiresDetachedCharger"),
@@ -179,11 +202,24 @@ public final class OneShotRunner {
         if (!current()) return;
         ProbeAccessibilityService service = ProbeAccessibilityService.active;
         if (service == null) { finish("service-not-connected"); return; }
+        // Opening DingTalk itself may invoke its own 极速打卡. Persist that
+        // uncertainty before navigation so a failed verification is not replayed.
+        if (morning && !verification) {
+            expectedDate = evidence.optString("workDate");
+            clickedAt = System.currentTimeMillis();
+            try { evidence.put("mutationPossible", true); evidence.put("navigationRequestedAt", clickedAt); }
+            catch (Exception error) { finish("navigation-consumption-save-failed"); return; }
+            if (!save()) { finish("navigation-consumption-save-failed"); return; }
+        }
         stage(verification ? "refresh-receipt-page" : "navigate");
         AttendanceNavigator.openAttendance(service, code -> {
             if (!current()) return;
             put(verification ? "verificationNavigationOutcome" : "navigationOutcome", code);
-            if (!"attendance-page-ready".equals(code)) { finish("attendance-navigation-failed"); return; }
+            if (!"attendance-page-ready".equals(code)) {
+                if (morning && !verification && !locked()) inspectSuccessModal(0);
+                else finish("attendance-navigation-failed");
+                return;
+            }
             MAIN.postDelayed(() -> capture(verification, 0), 2000);
         });
     }
@@ -217,17 +253,77 @@ public final class OneShotRunner {
                     return;
                 }
                 put(afterClick ? "after" : "before", receipt(result));
-                if (!result.accepted) { finish(afterClick ? "checkout-result-unverified" : "receipt-unverified"); return; }
+                if (!result.accepted) { finish(afterClick ? "punch-result-unverified" : "receipt-unverified"); return; }
                 if (!afterClick) {
+                    if (scheduled) { handleScheduledReceipt(result); return; }
                     if (!checkout) { finish("read-only-verified"); return; }
                     click(result);
                 } else {
-                    if (newCheckout(result)) { finish("checkout-update-verified"); return; }
+                    if (morning) {
+                        if (NativeRunPolicy.newReceipt(expectedDate, result.date, result.checkIn, null,
+                                clickedAt, result.freshTimeMs, System.currentTimeMillis())) finish("morning-verified");
+                        else finish("morning-result-unverified");
+                        return;
+                    }
+                    if (newCheckout(result)) { finish(scheduled ? "evening-verified" : "checkout-update-verified"); return; }
                     if (retry < 2) MAIN.postDelayed(() -> capture(true, retry + 1), 3000);
                     else finish("checkout-unchanged-or-unverified");
                 }
             });
         });
+    }
+
+    private void handleScheduledReceipt(FrameOcr.Result before) {
+        String date = evidence.optString("workDate");
+        long now = System.currentTimeMillis();
+        if (!date.equals(before.date)) { finish("scheduled-date-unconfirmed"); return; }
+        if (morning) {
+            if (before.checkIn != null) {
+                finish(NativeRunPolicy.currentReceipt(date, before.date, before.checkIn, before.freshTimeMs, now)
+                    ? "morning-verified" : "morning-receipt-unconfirmed");
+                return;
+            }
+            clickMorning(before); return;
+        }
+        try {
+            if (!NativeRunPolicy.currentReceipt(date, before.date, before.checkIn, before.freshTimeMs, now)) {
+                finish("evening-checkin-unconfirmed"); return;
+            }
+            long notBefore = NativeRunPolicy.eveningAt(date, before.checkIn,
+                evidence.getInt("eveningFloorMinutes"), evidence.getInt("durationMinutes"), evidence.getInt("marginMinutes"));
+            put("verifiedNotBefore", notBefore);
+            if (now < notBefore) { put("rescheduleAt", notBefore); finish("evening-deferred"); return; }
+            if (before.checkOut != null && NativeRunPolicy.receiptAt(date, before.checkOut) >= notBefore) {
+                finish("evening-verified"); return;
+            }
+            click(before);
+        } catch (Exception error) { finish("evening-rule-unconfirmed"); }
+    }
+
+    private void clickMorning(FrameOcr.Result before) {
+        if (!current() || !validFrame() || before.checkIn != null || before.checkOut != null ||
+            !"上班打卡".equals(before.actionLabel) || before.actionBounds == null ||
+            !evidence.optString("workDate").equals(before.date) ||
+            System.currentTimeMillis() < before.freshTimeMs || System.currentTimeMillis() - before.freshTimeMs > 15000) {
+            finish("morning-context-unconfirmed"); return;
+        }
+        expectedDate = before.date; clickedAt = System.currentTimeMillis();
+        try { evidence.put("clickRequestedAt", clickedAt); evidence.put("clickCount", 1); evidence.put("stage", "morning-click-consumed"); }
+        catch (Exception error) { finish("click-consumption-save-failed"); return; }
+        if (!save()) { finish("click-consumption-save-failed"); return; }
+        AttendanceNavigator.clickCheckIn(ProbeAccessibilityService.active, before.actionLabel, before.actionBounds,
+            this::validFrame, code -> {
+                if (!current()) return;
+                put("clickOutcome", code);
+                if (!"checkin-node-click-requested".equals(code) && !"checkin-gesture-completed".equals(code)) {
+                    finish("morning-click-not-completed"); return;
+                }
+                MAIN.postDelayed(() -> {
+                    if (!current()) return;
+                    if ("attendance-page-ready".equals(AttendanceNavigator.inspectAttendance(ProbeAccessibilityService.active))) capture(true, 0);
+                    else inspectSuccessModal(0);
+                }, 2500);
+            });
     }
 
     private void click(FrameOcr.Result before) {
@@ -237,7 +333,7 @@ public final class OneShotRunner {
             SystemClock.elapsedRealtime() - frameRequestedElapsed > 15000 ||
             frameWindowId < 0 || frameWindowId != windowId() ||
             frameLayoutVersion != ProbeAccessibilityService.layoutVersion ||
-            !ZonedDateTime.now().toLocalDate().toString().equals(before.date) ||
+            !ZonedDateTime.now(NativeRunPolicy.ZONE).toLocalDate().toString().equals(before.date) ||
             before.actionBounds == null || !"下班打卡".equals(before.actionLabel)) {
             finish("checkout-context-unconfirmed"); return;
         }
@@ -296,6 +392,7 @@ public final class OneShotRunner {
                     else inspectSuccessModal(0);
                     return;
                 }
+                if (scheduled) { finish("unexpected-early-checkout-confirmation"); return; }
                 try {
                     evidence.put("earlyConfirmationCount", 1);
                     evidence.put("earlyConfirmationRequestedAt", System.currentTimeMillis());
@@ -328,7 +425,7 @@ public final class OneShotRunner {
         ProbeAccessibilityService.captureFrame(context, (bitmap, capturedAt, code) -> {
             if (!current()) { if (bitmap != null) bitmap.recycle(); return; }
             if (bitmap == null) { finish("success-modal-frame-failed"); return; }
-            FrameOcr.recognizeCheckoutSuccess(bitmap, capturedAt, result -> {
+            FrameOcr.SuccessCallback callback = result -> {
                 if (!current()) return;
                 if (!validSuccessFrame()) {
                     if (retry < 2 && !locked()) MAIN.postDelayed(() -> inspectSuccessModal(retry + 1), 300);
@@ -341,12 +438,14 @@ public final class OneShotRunner {
                     else finish("success-modal-unconfirmed");
                     return;
                 }
-                if (!newCheckoutTime(result.date, result.checkOut, result.freshTimeMs)) {
+                if (!(morning ? NativeRunPolicy.newReceipt(expectedDate, result.date, result.checkOut, null,
+                        clickedAt, result.freshTimeMs, System.currentTimeMillis())
+                        : newCheckoutTime(result.date, result.checkOut, result.freshTimeMs))) {
                     finish("success-modal-time-unconfirmed"); return;
                 }
                 try {
                     JSONObject modal = new JSONObject();
-                    modal.put("date", result.date); modal.put("checkOut", result.checkOut);
+                    modal.put("date", result.date); modal.put(morning ? "checkIn" : "checkOut", result.checkOut);
                     modal.put("capturedAt", result.freshTimeMs); evidence.put("successModal", modal);
                     evidence.put("viewResultCount", 1); evidence.put("stage", "view-result-consumed");
                 } catch (Exception ignored) { finish("view-result-consumption-save-failed"); return; }
@@ -357,7 +456,9 @@ public final class OneShotRunner {
                     if (!"checkout-result-returned".equals(outcome)) { finish("result-navigation-unconfirmed"); return; }
                     open(true);
                 });
-            });
+            };
+            if (morning) FrameOcr.recognizeCheckInSuccess(bitmap, capturedAt, callback);
+            else FrameOcr.recognizeCheckoutSuccess(bitmap, capturedAt, callback);
         });
     }
 
@@ -369,12 +470,10 @@ public final class OneShotRunner {
     }
     private boolean newCheckoutTime(String date, String checkOut, long capturedAt) {
         try {
-            if (checkOut == null || checkOut.equals(previousCheckout) ||
-                !expectedDate.equals(date) || capturedAt < clickedAt) return false;
-            ZoneId zone = ZoneId.systemDefault();
-            ZonedDateTime clicked = Instant.ofEpochMilli(clickedAt).atZone(zone);
-            long actual = clicked.toLocalDate().atTime(LocalTime.parse(checkOut)).atZone(zone).toInstant().toEpochMilli();
-            return actual >= (clickedAt / 60000) * 60000 && actual <= System.currentTimeMillis();
+            return NativeRunPolicy.newReceipt(expectedDate, date, checkOut, previousCheckout,
+                clickedAt, capturedAt, System.currentTimeMillis()) &&
+                (!scheduled || NativeRunPolicy.receiptAt(date, checkOut) + (checkOut.length() == 5 ? 59999L : 0)
+                    >= evidence.optLong("verifiedNotBefore"));
         } catch (Exception ignored) { return false; }
     }
 
@@ -397,7 +496,7 @@ public final class OneShotRunner {
     }
     private boolean validConfirmationFrame() {
         return checkout && clickedAt > 0 && expectedDate != null &&
-            expectedDate.equals(ZonedDateTime.now().toLocalDate().toString()) &&
+            expectedDate.equals(ZonedDateTime.now(NativeRunPolicy.ZONE).toLocalDate().toString()) &&
             System.currentTimeMillis() >= clickedAt && System.currentTimeMillis() - clickedAt <= 30000 &&
             frameContentVersion == ProbeAccessibilityService.contentVersion &&
             validTargetFrame();
@@ -405,8 +504,8 @@ public final class OneShotRunner {
     private boolean validSuccessFrame() {
         // The result link only navigates. Background clocks emit text updates
         // while this modal stays fixed; retain fresh window/layout binding.
-        return checkout && clickedAt > 0 && expectedDate != null &&
-            expectedDate.equals(ZonedDateTime.now().toLocalDate().toString()) &&
+        return (checkout || morning) && clickedAt > 0 && expectedDate != null &&
+            expectedDate.equals(ZonedDateTime.now(NativeRunPolicy.ZONE).toLocalDate().toString()) &&
             validTargetFrame();
     }
     private boolean validTargetFrame() {
@@ -427,7 +526,10 @@ public final class OneShotRunner {
         try { return root.getWindowId(); } finally { root.recycle(); }
     }
     private boolean locked() { return ((KeyguardManager)context.getSystemService(Context.KEYGUARD_SERVICE)).isKeyguardLocked(); }
-    private boolean current() { return !finished && active == this && SystemClock.elapsedRealtime() < deadline; }
+    private boolean current() {
+        return !finished && active == this && SystemClock.elapsedRealtime() < deadline &&
+            (!scheduled || NativeTrialScheduler.isJobRunning(context, evidence.optString("planId"), id));
+    }
     private void stage(String value) { put("stage", value); }
     private void put(String key, Object value) { try { evidence.put(key, value); save(); } catch (Exception ignored) {} }
     private boolean save() { return ProbeState.putChecked(context, "trial", evidence); }
@@ -436,9 +538,14 @@ public final class OneShotRunner {
         finished = true;
         NativeUnlock.cancel();
         AttendanceNavigator.cancel();
+        if (scheduled && ProbeAccessibilityService.active != null && !locked()) {
+            try { evidence.put("relockRequested", ProbeAccessibilityService.active.performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)); }
+            catch (Exception ignored) {}
+        }
         try { evidence.put("outcome", outcome); evidence.put("status", "finished"); evidence.put("finishedAt", System.currentTimeMillis()); save(); }
         catch (Exception ignored) {}
         if (wake != null && wake.isHeld()) wake.release();
         synchronized (OneShotRunner.class) { if (active == this) active = null; }
+        if (scheduled) NativeTrialScheduler.onRunnerFinished(context, evidence);
     }
 }
