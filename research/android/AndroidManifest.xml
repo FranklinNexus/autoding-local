@@ -8,8 +8,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <queries><package android:name="com.alibaba.android.rimet" /></queries>
     <application android:label="AutoDing 能力研究" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
+        <activity android:name=".DiagnosticsActivity" android:exported="false" />
         <activity android:name=".PinSetupActivity" android:exported="false" android:excludeFromRecents="true" />
-        <activity android:name=".MainActivity" android:exported="true" android:showWhenLocked="true" android:turnScreenOn="true">
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
         <service android:name=".ProbeAccessibilityService" android:exported="true" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

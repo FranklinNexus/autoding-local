@@ -27,6 +27,17 @@ public final class NativeTrialScheduler {
             throw new IllegalStateException("schedule-save-failed");
     }
     public static synchronized JSONObject status(Context c) {return read(c);}
+    public static synchronized boolean manualTestAllowed(Context c,long now,long end) {
+        JSONObject s=read(c);if(!s.optBoolean("enabled"))return true;
+        JSONArray jobs=s.optJSONArray("jobs");if(jobs==null)return true;
+        for(int i=0;i<jobs.length();i++) {
+            JSONObject j=jobs.optJSONObject(i);if(j==null)continue;
+            if("running".equals(j.optString("status")))return false;
+            long at=j.optLong("scheduledAt");
+            if("pending".equals(j.optString("status")) && at>=now-900000 && at<=end)return false;
+        }
+        return true;
+    }
     public static synchronized boolean isJobRunning(Context c,String plan,String id) {
         JSONObject s=read(c), j=find(s,id);
         return s.optBoolean("enabled") && plan.equals(s.optString("planId")) && j!=null && "running".equals(j.optString("status"));
@@ -50,30 +61,100 @@ public final class NativeTrialScheduler {
         s.put("zone","Asia/Shanghai"); s.put("morningMinutes",morning); s.put("eveningFloorMinutes",floor);
         s.put("durationMinutes",duration); s.put("marginMinutes",margin); s.put("chargingRequired",false);
         s.put("jobs",new JSONArray()); s.put("receipts",new JSONObject()); s.put("reports",new JSONArray());
-        for(LocalDate date=LocalDate.parse(start);!date.isAfter(LocalDate.parse(end));date=date.plusDays(1)) {
-            long at=NativeTrialPlanner.morningAt(date.toString(),morning);
-            if(at>now) add(s,date.toString(),"MORNING",at);
-        }
+        retainHistory(s,old,start,end,now);
         if(verifiedDate!=null || verifiedCheckIn!=null) {
             if(verifiedDate==null || verifiedCheckIn==null || !verifiedDate.equals(today.toString()) ||
                 verifiedDate.compareTo(start)<0 || verifiedDate.compareTo(end)>0 || NativeRunPolicy.receiptAt(verifiedDate,verifiedCheckIn)>now)
                 throw new IllegalArgumentException("verified-receipt-invalid");
-            JSONObject receipt=new JSONObject();receipt.put("date",verifiedDate);receipt.put("checkIn",verifiedCheckIn);
-            receipt.put("source","setup-verified-official-card");receipt.put("capturedAt",now);
-            s.getJSONObject("receipts").put(verifiedDate,receipt);
-            long at=evening(s,verifiedDate,verifiedCheckIn);
-            if(at<=now) throw new IllegalArgumentException("evening-already-due");
-            add(s,verifiedDate,"EVENING",at);
+            JSONObject receipt=s.getJSONObject("receipts").optJSONObject(verifiedDate);
+            if(receipt!=null && !receipt.isNull("checkIn") && !verifiedCheckIn.equals(receipt.optString("checkIn")))
+                throw new IllegalArgumentException("verified-receipt-conflict");
+            if(receipt==null || receipt.isNull("checkIn")) {
+                receipt=new JSONObject();receipt.put("date",verifiedDate);receipt.put("checkIn",verifiedCheckIn);
+                receipt.put("source","setup-verified-official-card");receipt.put("capturedAt",now);
+                s.getJSONObject("receipts").put(verifiedDate,receipt);
+            }
         }
-        if(s.getJSONArray("jobs").length()==0)throw new IllegalArgumentException("no-future-jobs");
+        for(LocalDate day=LocalDate.parse(start);!day.isAfter(LocalDate.parse(end));day=day.plusDays(1)) {
+            String date=day.toString();
+            JSONObject receipt=s.getJSONObject("receipts").optJSONObject(date);
+            boolean checkedIn=receipt!=null && !receipt.isNull("checkIn");
+            if(find(s,date+"-MORNING")==null && !checkedIn) {
+                long at=NativeTrialPlanner.morningAt(date,morning);
+                if(at>now) addReplanned(s,old,date,"MORNING",at);
+            }
+            if(find(s,date+"-EVENING")!=null || !checkedIn)continue;
+            // A completed shift keeps its original rule even when tomorrow's
+            // settings are edited. Earlier test receipts still require checkout.
+            if(completedReceipt(old,receipt,date,now)) {
+                add(s,date,"EVENING",NativeRunPolicy.receiptAt(date,receipt.getString("checkOut")));
+                JSONObject done=find(s,date+"-EVENING");
+                done.put("status","finished");done.put("outcome","evening-verified");done.put("confirmedFromReceipt",true);
+                continue;
+            }
+            long at=evening(s,date,receipt.getString("checkIn"));
+            addReplanned(s,old,date,"EVENING",at);
+            JSONObject job=find(s,date+"-EVENING");
+            if(completedReceipt(s,receipt,date,now)) {
+                job.put("status","finished");job.put("outcome","evening-verified");job.put("confirmedFromReceipt",true);
+            } else if(at<=now) {
+                job.put("status","missed");job.put("outcome","overdue-not-replayed");
+            }
+        }
+        boolean pending=false;
+        JSONArray jobs=s.getJSONArray("jobs");
+        for(int i=0;i<jobs.length();i++) pending |= "pending".equals(jobs.getJSONObject(i).optString("status"));
+        if(!pending){s.put("enabled",false);s.put("stoppedReason","bounded-trial-ended");}
         if(old.has("planId") && !c.getSharedPreferences(PREF,0).edit()
             .putString("archive_"+old.getString("planId"),old.toString()).commit())
             throw new IllegalStateException("archive-save-failed");
-        cancelAlarms(c,old);
         old.put("enabled",false); old.put("stoppedReason","replaced"); save(c,old);
+        cancelAlarms(c,old);
         OneShotRunner.cancel(c);
         save(c,s);
-        try {armPending(c,s);} catch(Exception error){stopFailed(c,s,"alarm-registration-failed");throw error;}
+        try {if(s.optBoolean("enabled"))armPending(c,s);} catch(Exception error){stopFailed(c,s,"alarm-registration-failed");throw error;}
+    }
+    private static boolean retainedDate(String date,String start,String end) {
+        return date!=null && date.compareTo(start)>=0 && date.compareTo(end)<=0;
+    }
+    private static void retainHistory(JSONObject s,JSONObject old,String start,String end,long now) throws Exception {
+        JSONObject receipts=old.optJSONObject("receipts");
+        for(LocalDate day=LocalDate.parse(start);!day.isAfter(LocalDate.parse(end));day=day.plusDays(1)) {
+            String date=day.toString();JSONObject r=receipts==null?null:receipts.optJSONObject(date);
+            if(r!=null)s.getJSONObject("receipts").put(date,new JSONObject(r.toString()));
+        }
+        JSONArray reports=old.optJSONArray("reports");
+        if(reports!=null)for(int i=0;i<reports.length();i++) {
+            JSONObject r=reports.optJSONObject(i);
+            if(r!=null && retainedDate(r.optString("workDate"),start,end))s.getJSONArray("reports").put(new JSONObject(r.toString()));
+        }
+        JSONArray jobs=old.optJSONArray("jobs");
+        if(jobs==null)return;
+        for(int i=0;i<jobs.length();i++) {
+            JSONObject prior=jobs.optJSONObject(i);
+            if(prior==null || !retainedDate(prior.optString("workDate"),start,end))continue;
+            // Only untouched future jobs may be rebuilt. Failed, ambiguous,
+            // completed and overdue jobs remain consumed across settings edits.
+            if("pending".equals(prior.optString("status")) && prior.optLong("scheduledAt")>now)continue;
+            JSONObject kept=new JSONObject(prior.toString());
+            kept.put("originPlanId",prior.optString("planId"));kept.put("planId",s.getString("planId"));
+            if("pending".equals(kept.optString("status"))) {
+                kept.put("status","missed");kept.put("outcome","overdue-not-replayed");
+            }
+            s.getJSONArray("jobs").put(kept);
+        }
+    }
+    private static boolean completedReceipt(JSONObject rule,JSONObject receipt,String date,long now) {
+        try {
+            if(!date.equals(receipt.getString("date")) || receipt.isNull("checkIn") || receipt.isNull("checkOut"))return false;
+            long out=NativeRunPolicy.receiptAt(date,receipt.getString("checkOut"));
+            return out<=now && out>=evening(rule,date,receipt.getString("checkIn"));
+        }catch(Exception ignored){return false;}
+    }
+    private static void addReplanned(JSONObject s,JSONObject old,String date,String kind,long at) throws Exception {
+        add(s,date,kind,at);
+        JSONObject prior=find(old,date+"-"+kind),job=find(s,date+"-"+kind);
+        if(prior!=null && prior.optInt("deferrals")>0)job.put("deferrals",prior.optInt("deferrals"));
     }
     private static long evening(JSONObject s,String date,String checkIn) throws Exception {
         return NativeTrialPlanner.eveningAt(date,checkIn,s.getInt("eveningFloorMinutes"),s.getInt("durationMinutes"),s.getInt("marginMinutes"));
@@ -119,8 +200,16 @@ public final class NativeTrialScheduler {
         try{s.put("enabled",false);s.put("stoppedReason",reason);save(c,s);}catch(Exception ignored){}
     }
     public static synchronized void cancel(Context c) {
-        JSONObject s=read(c);cancelAlarms(c,s);
-        try{s.put("enabled",false);s.put("stoppedReason","user-stopped");save(c,s);}catch(Exception ignored){}
+        try{cancelChecked(c);}catch(Exception ignored){
+            // Legacy callers still get a best-effort immediate stop. Interactive
+            // controls use cancelChecked to expose durable-state failures.
+            try{cancelAlarms(c,read(c));}finally{OneShotRunner.cancel(c);}
+        }
+    }
+    public static synchronized void cancelChecked(Context c) throws Exception {
+        JSONObject s=read(c);
+        s.put("enabled",false);s.put("stoppedReason","user-stopped");save(c,s);
+        try{cancelAlarms(c,s);}finally{OneShotRunner.cancel(c);}
     }
     public static synchronized void onAlarm(Context c,Intent intent) {
         JSONObject s=read(c),j=find(s,intent.getStringExtra("job_id"));

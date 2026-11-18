@@ -1,138 +1,205 @@
 package org.autoding.research;
 
-import android.Manifest;
 import android.app.Activity;
-import android.app.AlarmManager;
-import android.app.PendingIntent;
+import android.app.AlertDialog;
+import android.app.TimePickerDialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.res.ColorStateList;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Bundle;
-import android.os.SystemClock;
+import android.os.Handler;
 import android.provider.Settings;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.NumberPicker;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
-import java.util.UUID;
+import android.widget.Toast;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
+/** Phone-first controls. Opening this page never changes an attendance plan. */
 public final class MainActivity extends Activity {
-    private TextView report;
-    @Override public void onCreate(Bundle state) {
-        super.onCreate(state);
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout column = new LinearLayout(this); column.setOrientation(LinearLayout.VERTICAL); column.setPadding(24, 32, 24, 32);
-        scroll.addView(column); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("AutoDing 能力研究"); title.setTextSize(24); column.addView(title);
-        TextView detail = new TextView(this);
-        detail.setText("手机独立试用：定时唤醒、PIN 解锁、打开钉钉、本机识别回执。支持电池供电。指定日期内按实际签到计算下班，试用结束后停止。请先停用原 App 和电脑的打卡任务。");
-        column.addView(detail);
-        add(column, "刷新能力报告", this::refresh);
-        add(column, "停止手机定时试用", () -> { NativeTrialScheduler.cancel(this); OneShotRunner.cancel(this); refresh(); });
-        add(column, "恢复尚未到点的手机任务", () -> { NativeTrialScheduler.restore(this); refresh(); });
-        add(column, "设置本机加密 PIN", () -> startActivity(new Intent(this, PinSetupActivity.class)));
-        add(column, "60 秒后独立读取考勤（不点击）", () -> scheduleTrial(false));
-        add(column, "已拔电脑：3 分钟后只读取考勤", () -> new android.app.AlertDialog.Builder(this)
-            .setTitle("电池供电读取测试")
-            .setMessage("拔掉电脑 USB；要测试电池，请同时拔掉充电头。确认后按电源键锁屏，至少等 6 分钟再接回电脑。此次只导航和读取，不点击打卡。钉钉自身极速打卡可能在打开时触发。")
-            .setNegativeButton("取消", null).setPositiveButton("开始 3 分钟倒计时", (d,w) -> {
-                try {
-                    Intent usb=registerReceiver(null,new android.content.IntentFilter("android.hardware.usb.action.USB_STATE"));
-                    if(usb==null || usb.getBooleanExtra("connected",false)) {
-                        android.widget.Toast.makeText(this,"请先拔掉电脑 USB",android.widget.Toast.LENGTH_LONG).show();return;
-                    }
-                    OneShotRunner.schedule(this,false,180,true);refresh();
-                    new android.app.AlertDialog.Builder(this).setTitle("已安排 3 分钟后读取")
-                        .setMessage("请按电源键锁屏息屏，至少等 6 分钟再接回电脑。")
-                        .setPositiveButton("知道了",null).show();
-                } catch(Exception error) {android.widget.Toast.makeText(this,"测试尚未安排",android.widget.Toast.LENGTH_LONG).show();}
-            }).show());
-        add(column, "60 秒后测试下班 / 更新下班卡", () -> new android.app.AlertDialog.Builder(this)
-            .setTitle("一次下班实测")
-            .setMessage("手机会在 60 秒后尝试解锁、打开考勤页并点击一次下班打卡。现在操作可能产生早退记录；当前已有下班卡时会尝试更新。结束后请核对钉钉记录。")
-            .setNegativeButton("取消", null).setPositiveButton("安排本次实测", (d,w) -> scheduleTrial(true)).show());
-        add(column, "取消本次独立测试", () -> { OneShotRunner.cancel(this); refresh(); });
-        add(column, "已拔电脑：3 分钟后测试下班", () -> new android.app.AlertDialog.Builder(this)
-            .setTitle("手机独立单次实测")
-            .setMessage("请先拔掉电脑 USB，可用电池或充电头。确认后安排 3 分钟后的手机系统闹钟；请按电源键锁屏息屏，6 分钟后再接回电脑。本次会实际更新下班卡。")
-            .setNegativeButton("取消", null).setPositiveButton("开始 3 分钟倒计时", (d,w) -> {
-                try {
-                    Intent usb=registerReceiver(null,new android.content.IntentFilter("android.hardware.usb.action.USB_STATE"));
-                    Intent battery=registerReceiver(null,new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-                    int source=battery == null ? -1 : battery.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED,-1);
-                    String reason=TrialStartGuard.rejection(true,usb != null,
-                        usb != null && usb.getBooleanExtra("connected",false),source,true,false);
-                    if (!reason.isEmpty()) {
-                        new android.app.AlertDialog.Builder(this).setTitle("尚未安排")
-                            .setMessage("请确认已拔掉电脑 USB。检测结果："+reason).setPositiveButton("知道了",null).show();
-                        return;
-                    }
-                    OneShotRunner.schedule(this,true,180,true); refresh();
-                    new android.app.AlertDialog.Builder(this).setTitle("已安排 3 分钟后测试")
-                        .setMessage("现在请按电源键锁屏息屏；可用电池运行，6 分钟后再接回电脑。")
-                        .setPositiveButton("知道了",null).show();
-                } catch (Exception ignored) {
-                    android.widget.Toast.makeText(this,"尚未安排，请检查闹钟权限或当前任务。",android.widget.Toast.LENGTH_LONG).show();
-                }
-            }).show());
-        add(column, "打开无障碍设置", () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        add(column, "检查当前窗口与截图能力", () -> { ProbeAccessibilityService.requestScan(this); report.postDelayed(this::refresh, 1500); });
-        add(column, "60 秒后运行一次唤醒检查", () -> {
-            if (!((AlarmManager)getSystemService(ALARM_SERVICE)).canScheduleExactAlarms()) {
-                startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + getPackageName())));
-            } else { scheduleProbe(this); refresh(); }
-        });
-        add(column, "60 秒系统闹钟接口对照", () -> {
-            if (!((AlarmManager)getSystemService(ALARM_SERVICE)).canScheduleExactAlarms()) {
-                startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + getPackageName())));
-            } else { scheduleProbe(this, true); refresh(); }
-        });
-        add(column, "授予本实验位置权限", () -> requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION}, 1));
-        add(column, "检查位置模拟能力", () -> { ProbeState.put(this, "locationInspection", json(LocationProbe.inspect(this))); refresh(); });
-        add(column, "运行专用位置源实验", () -> new Thread(() -> {
-            ProbeState.put(this, "locationFixture", json(LocationProbe.runMockFixture(this)));
-            runOnUiThread(this::refresh);
-        }).start());
-        report = new TextView(this); report.setTextIsSelectable(true); column.addView(report);
-        if (getIntent().getBooleanExtra("pin_setup", false)) startActivity(new Intent(this, PinSetupActivity.class));
+    private static final int INK=0xff172b35, MUTED=0xff637780, GREEN=0xff087e74, BG=0xfff3f6f6;
+    private final Handler handler=new Handler();
+    private TextView stateTitle,nextTime,nextDetail,dateWindow,todayReceipt,ruleSummary,testState,readiness,recent;
+    private Switch enabled;
+    private Button testButton,cancelTest;
+    private boolean refreshing;
+    private final Runnable tick=new Runnable(){public void run(){refresh();handler.postDelayed(this,1000);}};
+
+    @Override public void onCreate(Bundle saved) {
+        super.onCreate(saved);
+        getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setBackgroundColor(BG);
+        LinearLayout page=column();page.setPadding(dp(20),dp(18),dp(20),dp(28));scroll.addView(page);setContentView(scroll);
+        TextView brand=text("AutoDing",29,INK,true);page.addView(brand);
+        page.addView(text("手机独立运行 · 试用版",13,MUTED,false));
+        LinearLayout hero=card(page,0xffe3f2ee);
+        LinearLayout row=row();hero.addView(row);
+        stateTitle=text("读取状态…",17,GREEN,true);row.addView(stateTitle,new LinearLayout.LayoutParams(0,-2,1));
+        enabled=new Switch(this);enabled.setText("定时");enabled.setTextColor(GREEN);enabled.setThumbTintList(ColorStateList.valueOf(GREEN));row.addView(enabled);
+        enabled.setOnCheckedChangeListener((v,on)->{if(!refreshing){refresh();if(on)editSchedule();else stopSchedule();}});
+        hero.addView(text("下一次执行",12,MUTED,false));
+        nextTime=text("—",36,INK,true);hero.addView(nextTime);
+        nextDetail=text("",14,INK,false);hero.addView(nextDetail);
+        dateWindow=text("",12,MUTED,false);space(hero,10);hero.addView(dateWindow);
+        LinearLayout rules=card(page,Color.WHITE);
+        rules.addView(text("打卡时间",19,INK,true));
+        ruleSummary=text("",15,INK,false);space(rules,10);rules.addView(ruleSummary);
+        todayReceipt=text("",13,MUTED,false);space(rules,10);rules.addView(todayReceipt);
+        button(rules,"设置时间与规则",false,this::editSchedule);
+        LinearLayout test=card(page,Color.WHITE);
+        test.addView(text("测试手机独立运行",19,INK,true));
+        test.addView(text("先启动倒计时，再拔线、锁屏。电池和充电头都支持。",13,MUTED,false));
+        testState=text("",14,INK,false);space(test,10);test.addView(testState);
+        testButton=button(test,"准备测试",true,this::prepareTest);
+        cancelTest=button(test,"取消这次测试",false,this::cancelManualTest);
+        LinearLayout result=card(page,Color.WHITE);
+        result.addView(text("最近结果",19,INK,true));recent=text("",14,INK,false);space(result,8);result.addView(recent);
+        LinearLayout settings=card(page,Color.WHITE);
+        settings.addView(text("运行条件",19,INK,true));readiness=text("",14,MUTED,false);space(settings,8);settings.addView(readiness);
+        button(settings,"权限与解锁设置",false,this::showSettings);
+        button(page,"诊断与实验 ›",false,()->startActivity(new Intent(this,DiagnosticsActivity.class)));
+        page.addView(text("以钉钉回执为准。试用仅在所示日期执行，到期自动停止。",12,MUTED,false));
+        if(getIntent().getBooleanExtra("pin_setup",false))startActivity(new Intent(this,PinSetupActivity.class));
     }
-    @Override public void onResume() { super.onResume(); refresh(); }
-    @Override protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent); setIntent(intent);
-        if (intent.getBooleanExtra("pin_setup", false)) startActivity(new Intent(this, PinSetupActivity.class));
-    }
-    private void add(LinearLayout parent, String label, Runnable action) {
-        Button button = new Button(this); button.setText(label); button.setOnClickListener(v -> action.run()); parent.addView(button);
-    }
-    private static org.json.JSONObject json(String value) {
-        try { return new org.json.JSONObject(value); } catch (Exception ignored) { return new org.json.JSONObject(); }
-    }
-    private void refresh() { if (report != null) try { report.setText(ProbeState.status(this).toString(2)); } catch (Exception ignored) {} }
-    private void scheduleTrial(boolean checkout) {
-        try { OneShotRunner.schedule(this, checkout); refresh(); }
-        catch (Exception ignored) { android.widget.Toast.makeText(this, "测试尚未安排，请检查闹钟权限或当前任务。", android.widget.Toast.LENGTH_LONG).show(); }
-    }
-    static void scheduleProbe(Context context) {
-        scheduleProbe(context, false);
-    }
-    static void scheduleProbe(Context context, boolean alarmClock) {
-        AlarmManager alarms = (AlarmManager)context.getSystemService(Context.ALARM_SERVICE);
-        if (!alarms.canScheduleExactAlarms()) throw new IllegalStateException("exact-alarm-required");
-        long at = System.currentTimeMillis() + 60000;
-        long elapsedAt = SystemClock.elapsedRealtime() + 60000;
-        String alarmId = UUID.randomUUID().toString();
-        Intent alarm = new Intent(context, ProbeAlarmReceiver.class)
-            .putExtra("probe_alarm_id", alarmId).putExtra("probe_scheduled_at", at).putExtra("probe_scheduled_elapsed", elapsedAt);
-        PendingIntent target = PendingIntent.getBroadcast(context, 1, alarm, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        if (alarmClock) {
-            PendingIntent show = PendingIntent.getActivity(context, 2, new Intent(context, MainActivity.class),
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            alarms.setAlarmClock(new AlarmManager.AlarmClockInfo(at, show), target);
-        } else {
-            alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, target);
+    @Override public void onResume(){super.onResume();handler.removeCallbacks(tick);handler.post(tick);}
+    @Override public void onPause(){handler.removeCallbacks(tick);super.onPause();}
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent.getBooleanExtra("pin_setup",false))startActivity(new Intent(this,PinSetupActivity.class));}
+
+    private void refresh(){
+        if(enabled==null)return;
+        JSONObject status=ProbeState.status(this),s=NativeTrialScheduler.status(this);
+        boolean on=s.optBoolean("enabled");refreshing=true;enabled.setChecked(on);refreshing=false;
+        JSONArray jobs=s.optJSONArray("jobs");JSONObject next=null;boolean running=false,overdue=false;
+        long now=System.currentTimeMillis();
+        if(jobs!=null)for(int i=0;i<jobs.length();i++){
+            JSONObject j=jobs.optJSONObject(i);if(j==null)continue;
+            running|="running".equals(j.optString("status"));
+            if("pending".equals(j.optString("status"))){
+                if(j.optLong("scheduledAt")<=now)overdue=true;
+                else if(next==null||j.optLong("scheduledAt")<next.optLong("scheduledAt"))next=j;
+            }
         }
-        ProbeState.putValues(context, "alarmId", alarmId, "alarmScheduledAt", at, "alarmScheduledElapsedRealtime", elapsedAt,
-            "alarmMode", alarmClock ? "alarm-clock" : "exact-allow-while-idle",
-            "alarmPlannedApi", alarmClock ? "AlarmManager.setAlarmClock" : "AlarmManager.setExactAndAllowWhileIdle");
+        label(stateTitle,on?(running?"正在执行":overdue?"待核对任务":"定时已开启"):"定时已关闭");
+        if(on&&next!=null){label(nextTime,time(next.optLong("scheduledAt"),"HH:mm"));label(nextDetail,dayLabel(next.optString("workDate"))+" · "+kind(next)+"  /  "+remaining(next.optLong("scheduledAt")-now));}
+        else {label(nextTime,on?(running?"执行中":"待核对"):"已暂停");label(nextDetail,on?"请在最近结果中查看执行情况":"已保留时间设置，开启后确认新安排");}
+        label(dateWindow,s.has("startDate")?"试用日期  "+s.optString("startDate")+" — "+s.optString("endDate")+"\n北京时间 · 到期停止":"尚未设置试用日期");
+        label(ruleSummary,"上班  "+hm(s.optInt("morningMinutes",420))+"\n下班  不早于 "+hm(s.optInt("eveningFloorMinutes",1110))+"\n同时满足：实际签到 + "+duration(s.optInt("durationMinutes",540))+" + "+s.optInt("marginMinutes",10)+" 分钟余量");
+        JSONObject receipts=s.optJSONObject("receipts"),r=receipts==null?null:receipts.optJSONObject(today());
+        String receipt="今日签到尚待核实；下班时间在读取签到后计算。";
+        if(r!=null&&!r.isNull("checkIn")&&!r.optString("checkIn").isEmpty()){
+            receipt="今日已核实签到  "+r.optString("checkIn");
+            try{receipt+="\n按当前规则，下班不早于 "+time(NativeTrialPlanner.eveningAt(today(),r.optString("checkIn"),s.optInt("eveningFloorMinutes",1110),s.optInt("durationMinutes",540),s.optInt("marginMinutes",10)),"HH:mm");}catch(Exception ignored){}
+            if(!r.isNull("checkOut")&&!r.optString("checkOut").isEmpty())receipt+="\n已读取下班记录  "+r.optString("checkOut");
+        }
+        label(todayReceipt,receipt);
+        JSONObject trial=status.optJSONObject("trial");boolean manual=trial!=null&&!trial.has("jobId");
+        boolean queued=manual&&"scheduled".equals(trial.optString("status")),active=manual&&"running".equals(trial.optString("status"));
+        if(queued){long left=trial.optLong("scheduledAt")-now;label(testState,left>0?"已安排 · "+time(trial.optLong("scheduledAt"),"HH:mm:ss")+" 开始\n倒计时 "+countdown(left)+" · 现在可拔线并锁屏":"已到测试时间，等待手机执行");}
+        else if(active)label(testState,"正在测试 · "+stage(trial.optString("stage"))+"\n请等待完成后再操作手机");
+        else label(testState,manual?"上次测试："+outcome(trial.optString("outcome",trial.optString("status")))+"\n"+powerLabel():"仅打开考勤页并读取结果\n"+powerLabel());
+        testButton.setEnabled(!queued&&!active&&!running);cancelTest.setVisibility(queued||active?View.VISIBLE:View.GONE);
+        String conditions=(status.optBoolean("accessibilityConnected")?"✓ 无障碍已连接":"○ 请开启无障碍服务")+"\n"+(status.optBoolean("exactAlarmAllowed")?"✓ 定时权限已开启":"○ 请开启精确闹钟权限")+"\n"+(status.optBoolean("hasPinStorage")?"✓ 本机解锁已配置":"○ 请设置本机解锁 PIN");
+        label(readiness,conditions+"\n"+powerLabel()+"\n华为需允许自启动、关联启动和后台活动。");
+        JSONArray reports=s.optJSONArray("reports");JSONObject last=reports!=null&&reports.length()>0?reports.optJSONObject(reports.length()-1):null;
+        label(recent,last==null?"定时任务尚无执行结果。\n独立测试结果显示在上方测试卡片。":time(last.optLong("finishedAt",last.optLong("firedAt")),"MM-dd HH:mm")+" · "+kind(last)+"\n"+outcome(last.optString("outcome")));
     }
+
+    private void editSchedule(){
+        if(OneShotRunner.isActive()){notice("当前任务正在执行，请完成后再设置。");return;}
+        JSONObject s=NativeTrialScheduler.status(this);
+        final int[] values={s.optInt("morningMinutes",420),s.optInt("eveningFloorMinutes",1110),s.optInt("durationMinutes",540),s.optInt("marginMinutes",10)};
+        LocalDate a=LocalDate.now(NativeRunPolicy.ZONE),b=a.plusDays(1);
+        try{LocalDate savedStart=LocalDate.parse(s.optString("startDate")),savedEnd=LocalDate.parse(s.optString("endDate"));if(!savedEnd.isBefore(a)){if(savedStart.isAfter(a))a=savedStart;b=savedEnd;}}catch(Exception ignored){}
+        final String start=a.toString(),end=b.toString();
+        LinearLayout form=column();form.setPadding(dp(24),dp(8),dp(24),0);
+        form.addView(text("试用日期："+start+" — "+end+"\n北京时间；到期停止。保存后开启此安排。",13,MUTED,false));
+        Button morning=button(form,"",false,()->{}),floor=button(form,"",false,()->{}),hours=button(form,"",false,()->{}),margin=button(form,"",false,()->{});
+        Runnable labels=()->{morning.setText("上班时间     "+hm(values[0])+"  ›");floor.setText("下班最早     "+hm(values[1])+"  ›");hours.setText("签到后间隔     "+duration(values[2])+"  ›");margin.setText("额外余量     "+values[3]+" 分钟  ›");};labels.run();
+        morning.setOnClickListener(v->pickTime(values,0,labels));floor.setOnClickListener(v->pickTime(values,1,labels));
+        hours.setOnClickListener(v->pickNumber("签到后间隔（分钟）",1,1440,values,2,labels));margin.setOnClickListener(v->pickNumber("额外余量（分钟）",0,120,values,3,labels));
+        form.addView(text("下班取两者中较晚的时间。已核实的签到和已执行记录会保留，过期任务不会自动补打。",13,MUTED,false));
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("设置打卡时间").setView(form).setNegativeButton("取消",null).setPositiveButton("保存并开启",null).create();
+        dialog.setOnShowListener(v->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->{
+            if(OneShotRunner.isActive()){notice("当前任务正在执行，请完成后再保存。");return;}
+            JSONObject current=ProbeState.status(this);
+            if(!current.optBoolean("accessibilityConnected")||!current.optBoolean("exactAlarmAllowed")||!current.optBoolean("hasPinStorage")){notice("请先完成权限与解锁设置。");return;}
+            JSONObject trial=current.optJSONObject("trial");if(trial!=null&&"scheduled".equals(trial.optString("status"))){notice("请先完成或取消当前独立测试。");return;}
+            try{
+                JSONObject live=NativeTrialScheduler.status(this),rs=live.optJSONObject("receipts"),r=rs==null?null:rs.optJSONObject(today());
+                String in=r==null||r.isNull("checkIn")?null:r.optString("checkIn",null);
+                boolean keep=in!=null&&today().compareTo(start)>=0&&today().compareTo(end)<=0;
+                NativeTrialScheduler.configure(this,start,end,values[0],values[1],values[2],values[3],keep?today():null,keep?in:null);
+                dialog.dismiss();notice(NativeTrialScheduler.status(this).optBoolean("enabled")?"时间已保存，定时已开启。":"时间已保存；所选日期已无待执行任务。");
+            }catch(Exception error){notice(errorText(error));}finally{refresh();}
+        }));dialog.show();
+    }
+    private void stopSchedule(){
+        new AlertDialog.Builder(this).setTitle("关闭定时打卡？").setMessage("将取消待执行的定时任务并停止当前运行。已核实的记录和时间设置会保留。").setNegativeButton("保留开启",null).setPositiveButton("关闭定时",(d,w)->{
+            try{NativeTrialScheduler.cancelChecked(this);notice("定时已关闭。");}catch(Exception error){notice("关闭未完成，请查看当前状态后重试。");}finally{refresh();}
+        }).show();
+    }
+    private void prepareTest(){
+        new AlertDialog.Builder(this).setTitle("只读取考勤测试").setMessage("1. 点下方按钮，开始 3 分钟倒计时。\n2. 拔掉电脑 USB；测试电池时也拔掉充电头。\n3. 按电源键锁屏，等满 6 分钟再接回电脑。\n\n此次仅导航和读取，App 不点击打卡；钉钉自身的极速打卡仍可能在打开时触发。").setNegativeButton("稍后",null).setPositiveButton("开始 3 分钟倒计时",(d,w)->{
+            try{
+                JSONObject state=ProbeState.status(this);
+                if(!state.optBoolean("accessibilityConnected")||!state.optBoolean("hasPinStorage"))throw new IllegalStateException("setup-required");
+                JSONObject s=NativeTrialScheduler.status(this);JSONArray jobs=s.optJSONArray("jobs");long now=System.currentTimeMillis();
+                if(s.optBoolean("enabled")&&jobs!=null)for(int i=0;i<jobs.length();i++){JSONObject j=jobs.optJSONObject(i);if(j!=null&&("running".equals(j.optString("status"))||("pending".equals(j.optString("status"))&&j.optLong("scheduledAt")<=now+600000&&j.optLong("scheduledAt")>=now-900000)))throw new IllegalStateException("near-scheduled-job");}
+                OneShotRunner.schedule(this,false,180,true);refresh();
+                new AlertDialog.Builder(this).setTitle("已安排 · 3 分钟后开始").setMessage("现在拔掉 USB，不接充电头，然后按电源键锁屏。\n\n等满 6 分钟再接回电脑；倒计时和结果会保存在首页。").setPositiveButton("知道了",null).show();
+            }catch(Exception error){notice(errorText(error));refresh();}
+        }).show();
+    }
+    private void cancelManualTest(){
+        JSONObject t=ProbeState.saved(this).optJSONObject("trial");
+        if(t!=null&&!t.has("jobId")&&("scheduled".equals(t.optString("status"))||"running".equals(t.optString("status")))){OneShotRunner.cancelManual(this);notice("本次独立测试已取消。");}refresh();
+    }
+    private void showSettings(){new AlertDialog.Builder(this).setTitle("权限与解锁设置").setItems(new String[]{"无障碍服务","精确闹钟权限","本机加密 PIN","应用设置 / 后台运行"},(d,w)->{
+        if(w==0)startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        else if(w==1)startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:"+getPackageName())));
+        else if(w==2)startActivity(new Intent(this,PinSetupActivity.class));
+        else startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getPackageName())));
+    }).setNegativeButton("返回",null).show();}
+    private void pickTime(int[] values,int at,Runnable labels){new TimePickerDialog(this,(v,h,m)->{values[at]=h*60+m;labels.run();},values[at]/60,values[at]%60,true).show();}
+    private void pickNumber(String title,int min,int max,int[] values,int at,Runnable labels){NumberPicker picker=new NumberPicker(this);picker.setMinValue(min);picker.setMaxValue(max);picker.setValue(values[at]);picker.setWrapSelectorWheel(false);new AlertDialog.Builder(this).setTitle(title).setView(picker).setNegativeButton("取消",null).setPositiveButton("确定",(d,w)->{picker.clearFocus();values[at]=picker.getValue();labels.run();}).show();}
+    private String powerLabel(){Intent b=registerReceiver(null,new IntentFilter(Intent.ACTION_BATTERY_CHANGED)),u=registerReceiver(null,new IntentFilter("android.hardware.usb.action.USB_STATE"));int source=b==null?-1:b.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1),level=b==null?-1:b.getIntExtra(BatteryManager.EXTRA_LEVEL,-1),scale=b==null?100:b.getIntExtra(BatteryManager.EXTRA_SCALE,100);return (u==null?"USB 状态待确认":u.getBooleanExtra("connected",false)?"USB 已连接":"USB 已断开")+" · "+(source==0?"电池供电":source>0?"正在充电":"电源待确认")+(level>=0&&scale>0?" "+level*100/scale+"%":"");}
+    private static String errorText(Exception e){String code=e.getMessage();if("near-scheduled-job".equals(code))return "定时任务即将执行，请在完成后测试。";if("setup-required".equals(code))return "请先完成无障碍和本机 PIN 设置。";if("exact-alarm-required".equals(code))return "请先开启精确闹钟权限。";if("no-future-jobs".equals(code))return "所选日期没有待安排任务，请调整时间。";if("evening-already-due".equals(code))return "今天的下班时间已过，请核对记录后调整安排。";if("trial-already-running".equals(code)||"job-running".equals(code))return "当前任务正在运行，请完成后再试。";return "设置未完成，请检查权限、时间和当前任务后重试。";}
+    private static String outcome(String code){if("read-only-verified".equals(code))return "读取成功，回执已核实";if("morning-verified".equals(code))return "上班回执已核实";if("evening-verified".equals(code))return "下班回执已核实";if("evening-deferred".equals(code))return "已按实际签到顺延下班时间";if("cancelled".equals(code))return "已取消";if("trial-timeout".equals(code))return "执行超时，需检查后台运行";if("wall-trial-usb-still-connected".equals(code))return "测试未执行：USB 仍连接";if("wall-trial-lockscreen-unconfirmed".equals(code))return "测试未执行：到点时未锁屏息屏";if("native-unlock-failed".equals(code))return "解锁未完成，请检查本机设置";if(code.isEmpty())return "尚无结果";return "待核实 · "+code;}
+    private static String stage(String s){if("unlock".equals(s))return "唤醒并解锁";if("navigate".equals(s))return "打开考勤页";if("read-receipt".equals(s))return "读取考勤回执";if("verify-receipt".equals(s))return "核实结果";return "执行中";}
+    private static String today(){return LocalDate.now(NativeRunPolicy.ZONE).toString();}
+    private static String dayLabel(String date){return date.equals(today())?"今天":date.equals(LocalDate.now(NativeRunPolicy.ZONE).plusDays(1).toString())?"明天":date;}
+    private static String kind(JSONObject j){return "MORNING".equals(j.optString("kind"))?"上班打卡":"下班打卡";}
+    private static String hm(int v){return String.format(Locale.CHINA,"%02d:%02d",v/60,v%60);}
+    private static String duration(int v){return (v/60>0?v/60+" 小时":"")+(v%60>0?" "+v%60+" 分钟":"");}
+    private static String time(long at,String pattern){return at>0?Instant.ofEpochMilli(at).atZone(NativeRunPolicy.ZONE).format(DateTimeFormatter.ofPattern(pattern)):"—";}
+    private static String remaining(long ms){long minutes=Math.max(1,(ms+59999)/60000);return minutes>=60?minutes/60+" 小时 "+minutes%60+" 分钟后":minutes+" 分钟后";}
+    private static String countdown(long ms){long seconds=Math.max(0,(ms+999)/1000);return String.format(Locale.CHINA,"%02d:%02d",seconds/60,seconds%60);}
+    private static void label(TextView view,String value){if(!android.text.TextUtils.equals(view.getText(),value))view.setText(value);}
+    private void notice(String message){Toast.makeText(this,message,Toast.LENGTH_LONG).show();}
+    private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
+    private LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);return v;}
+    private LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.HORIZONTAL);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
+    private TextView text(String value,int size,int color,boolean bold){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);v.setTextColor(color);v.setLineSpacing(dp(3),1);if(bold)v.setTypeface(Typeface.DEFAULT,Typeface.BOLD);return v;}
+    private LinearLayout card(LinearLayout parent,int color){LinearLayout v=column();v.setPadding(dp(18),dp(16),dp(18),dp(16));GradientDrawable bg=new GradientDrawable();bg.setColor(color);bg.setCornerRadius(dp(20));v.setBackground(bg);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(16);parent.addView(v,lp);return v;}
+    private Button button(LinearLayout parent,String label,boolean primary,Runnable action){Button b=new Button(this);b.setText(label);b.setTextSize(14);b.setAllCaps(false);b.setTextColor(primary?Color.WHITE:GREEN);b.setMinHeight(dp(48));GradientDrawable bg=new GradientDrawable();bg.setColor(primary?GREEN:0xffedf5f3);bg.setCornerRadius(dp(12));b.setBackground(bg);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(12);parent.addView(b,lp);b.setOnClickListener(v->action.run());return b;}
+    private void space(LinearLayout parent,int height){View gap=new View(this);parent.addView(gap,new LinearLayout.LayoutParams(1,dp(height)));}
+    static void scheduleProbe(Context c){DiagnosticsActivity.scheduleProbe(c);}
+    static void scheduleProbe(Context c,boolean alarmClock){DiagnosticsActivity.scheduleProbe(c,alarmClock);}
 }

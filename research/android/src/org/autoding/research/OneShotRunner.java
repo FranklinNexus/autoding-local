@@ -70,6 +70,7 @@ public final class OneShotRunner {
     public static synchronized String schedule(Context context, boolean checkout, int delaySeconds, boolean requireDetached) throws Exception {
         if (active != null) throw new IllegalStateException("trial-already-running");
         if (delaySeconds < 60 || delaySeconds > 600) throw new IllegalArgumentException("trial-delay-out-of-range");
+        requireManualWindow(context, delaySeconds);
         AlarmManager alarms = (AlarmManager)context.getSystemService(Context.ALARM_SERVICE);
         if (!alarms.canScheduleExactAlarms()) throw new IllegalStateException("exact-alarm-required");
         String id = UUID.randomUUID().toString();
@@ -87,7 +88,15 @@ public final class OneShotRunner {
         PendingIntent show = PendingIntent.getActivity(context, 102, new Intent(context, MainActivity.class),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         if (!ProbeState.putChecked(context, "trial", report)) throw new IllegalStateException("trial-save-failed");
-        alarms.setAlarmClock(new AlarmManager.AlarmClockInfo(at, show), target);
+        try {
+            alarms.setAlarmClock(new AlarmManager.AlarmClockInfo(at, show), target);
+        } catch (Exception error) {
+            alarms.cancel(target); target.cancel();
+            report.put("status", "finished"); report.put("outcome", "alarm-registration-failed");
+            report.put("finishedAt", System.currentTimeMillis());
+            ProbeState.putChecked(context, "trial", report);
+            throw error;
+        }
         return id;
     }
 
@@ -96,6 +105,7 @@ public final class OneShotRunner {
     }
     public static synchronized void readCurrent(Context context, boolean checkout) throws Exception {
         if (active != null) throw new IllegalStateException("trial-already-running");
+        requireManualWindow(context, 0);
         JSONObject report = new JSONObject();
         String id = UUID.randomUUID().toString();
         report.put("id", id); report.put("status", "running");
@@ -111,6 +121,7 @@ public final class OneShotRunner {
     /** Diagnostic only: inspect an already displayed success receipt, with no input. */
     public static synchronized void readSuccessCurrent(Context context) throws Exception {
         if (active != null) throw new IllegalStateException("trial-already-running");
+        requireManualWindow(context, 0);
         JSONObject report = new JSONObject(); String id = UUID.randomUUID().toString();
         report.put("id", id); report.put("status", "running"); report.put("currentPageOnly", true);
         report.put("checkoutEnabled", false); report.put("successReadOnly", true);
@@ -132,6 +143,17 @@ public final class OneShotRunner {
         });
     }
 
+    private static void requireManualWindow(Context context, int delaySeconds) {
+        long now=System.currentTimeMillis();
+        // Covers the delay, allowed alarm lateness and bounded execution time.
+        if(!NativeTrialScheduler.manualTestAllowed(context,now,now+delaySeconds*1000L+300000))
+            throw new IllegalStateException("near-scheduled-job");
+    }
+    public static synchronized void cancelManual(Context context) {
+        if(active!=null && active.scheduled)return;
+        JSONObject trial=ProbeState.saved(context).optJSONObject("trial");
+        if(trial!=null && !trial.has("jobId"))cancel(context);
+    }
     public static synchronized void cancel(Context context) {
         PendingIntent target = PendingIntent.getBroadcast(context, 101,
             new Intent(context, ProbeAlarmReceiver.class), PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
@@ -538,7 +560,7 @@ public final class OneShotRunner {
         finished = true;
         NativeUnlock.cancel();
         AttendanceNavigator.cancel();
-        if (scheduled && ProbeAccessibilityService.active != null && !locked()) {
+        if ((scheduled || evidence.optBoolean("lockedAtStart")) && ProbeAccessibilityService.active != null && !locked()) {
             try { evidence.put("relockRequested", ProbeAccessibilityService.active.performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)); }
             catch (Exception ignored) {}
         }
